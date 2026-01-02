@@ -1,16 +1,7 @@
 ﻿/**
- * SFTP to HTTP Proxy Service - Multi-Store Version
- * Fetches CSV files from SFTP server for multiple stores and serves them via HTTP/HTTPS
- * 
- * Usage:
- *   npm install
- *   node sftp-proxy.js
- * 
- * Endpoints:
- *   GET /csv/:storeId - Get CSV for specific store
- *   GET /csv/:storeId/status - Get status for specific store
- *   GET /stores - List all available stores
- *   GET /health - Health check
+ * SFTP Proxy Server
+ * Fetches CSV files from SFTP server and serves them via HTTP
+ * Supports multi-store configuration
  */
 
 const express = require('express');
@@ -18,311 +9,303 @@ const Client = require('ssh2-sftp-client');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// Load configuration
-let config;
-try {
-  const configPath = path.join(__dirname, 'config.json');
-  if (fs.existsSync(configPath)) {
-    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  } else {
-    console.error('ERROR: config.json not found. Please copy config.example.json to config.json and configure it.');
-    process.exit(1);
-  }
-} catch (error) {
-  console.error('ERROR: Failed to load config.json:', error.message);
-  process.exit(1);
-}
-
-// Support both old single-store and new multi-store config formats
-const isMultiStore = config.stores !== undefined;
-let stores = {};
-
-if (isMultiStore) {
-  // Multi-store configuration
-  stores = config.stores;
-  console.log(`âœ… Multi-store mode: ${Object.keys(stores).length} stores configured`);
-} else {
-  // Legacy single-store configuration - convert to multi-store format
-  const storeId = config.store?.id || 'default';
-  stores[storeId] = {
-    name: config.store?.name || 'Default Store',
-    sftp: config.sftp
-  };
-  if (config.server?.apiKey) {
-    stores[storeId].apiKey = config.server.apiKey;
-  }
-  console.log(`âœ… Single-store mode (legacy): converted to store ID '${storeId}'`);
-}
-
-// Cache for CSV content per store
-const csvCache = {};
-
-// Initialize cache for each store
-Object.keys(stores).forEach(storeId => {
-  csvCache[storeId] = {
-    content: null,
-    lastModified: null,
-    hash: null,
-    lastFetch: null
-  };
-});
 
 // CORS middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
 });
 
-// Optional API key authentication middleware
-const authenticate = (req, res, next) => {
-  const storeId = req.params.storeId || req.query.storeId;
-  const store = stores[storeId];
-  
-  // Check for API key (per-store or global)
-  const apiKey = store?.apiKey || config.server?.apiKey;
-  
-  if (apiKey) {
-    const authHeader = req.headers.authorization;
-    const providedKey = authHeader?.replace('Bearer ', '') || req.query.apiKey;
-    
-    if (providedKey !== apiKey) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid API key' });
+// Load configuration from environment variables or config file
+let config = {};
+
+// Try to load from environment variables first (for Railway)
+if (process.env.SFTP_HOST) {
+  // Single store from environment variables
+  config = {
+    sftp: {
+      host: process.env.SFTP_HOST,
+      port: parseInt(process.env.SFTP_PORT) || 22,
+      username: process.env.SFTP_USERNAME,
+      password: process.env.SFTP_PASSWORD,
+      path: process.env.SFTP_PATH || '/MP15932.csv'
+    },
+    server: {
+      port: PORT,
+      apiKey: process.env.API_KEY || ''
     }
+  };
+} else {
+  // Try to load from config.json file
+  try {
+    const configPath = path.join(__dirname, 'config.json');
+    if (fs.existsSync(configPath)) {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } else {
+      console.warn('âš ï¸  No config.json found and no environment variables set. Using defaults.');
+      config = {
+        sftp: {
+          host: 'sftp.transfer.vauto.com',
+          port: 22,
+          username: '',
+          password: '',
+          path: '/MP15932.csv'
+        },
+        server: {
+          port: PORT,
+          apiKey: ''
+        }
+      };
+    }
+  } catch (error) {
+    console.error('âŒ Error loading config:', error.message);
+    process.exit(1);
   }
-  next();
-};
+}
+
+// Determine if multi-store or single-store
+const isMultiStore = config.stores !== undefined;
+let stores = {};
+
+if (isMultiStore) {
+  stores = config.stores;
+} else {
+  // Create single store from config
+  stores = {
+    'default': {
+      name: 'Default Store',
+      sftp: config.sftp,
+      apiKey: config.server.apiKey
+    }
+  };
+}
+
+// Cache for CSV files (per store)
+const csvCache = {};
+
+// Initialize cache for each store
+Object.keys(stores).forEach(storeId => {
+  csvCache[storeId] = {
+    content: null,
+    hash: null,
+    lastFetch: null,
+    lastModified: null,
+    size: 0
+  };
+});
 
 /**
- * Fetch CSV from SFTP server for a specific store
+ * Calculate SHA256 hash of content
+ */
+function calculateHash(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+/**
+ * Fetch CSV from SFTP for a specific store
  */
 async function fetchCSVFromSFTP(storeId) {
   const store = stores[storeId];
   if (!store) {
-    throw new Error(`Store '${storeId}' not found`);
+    throw new Error(`Store ${storeId} not found`);
   }
-  
+
+  const sftpConfig = store.sftp;
   const sftp = new Client();
-  const storeConfig = store.sftp;
-  
+
   try {
-    console.log(`[${storeId}] Connecting to SFTP server: ${storeConfig.host}:${storeConfig.port || 22}`);
-    
+    console.log(`ðŸ“¡ Connecting to SFTP: ${sftpConfig.host} for store ${storeId}...`);
     await sftp.connect({
-      host: storeConfig.host,
-      port: storeConfig.port || 22,
-      username: storeConfig.username,
-      password: storeConfig.password,
-      readyTimeout: 10000
+      host: sftpConfig.host,
+      port: sftpConfig.port || 22,
+      username: sftpConfig.username,
+      password: sftpConfig.password
     });
-    
-    console.log(`[${storeId}] SFTP connected successfully`);
-    
-    // Check if file exists
-    const exists = await sftp.exists(storeConfig.path);
-    if (!exists) {
-      throw new Error(`CSV file not found at path: ${storeConfig.path}`);
-    }
+
+    console.log(`ðŸ“¥ Fetching CSV: ${sftpConfig.path} for store ${storeId}...`);
+    const csvContent = await sftp.get(sftpConfig.path, false, { encoding: 'utf8' });
     
     // Get file stats
-    const stats = await sftp.stat(storeConfig.path);
-    console.log(`[${storeId}] File found: ${storeConfig.path} (${stats.size} bytes, modified: ${stats.modifyTime})`);
+    const stats = await sftp.stat(sftpConfig.path);
     
-    // Read file content using fastGet to temp file (more reliable)
-    const tempFilePath = path.join(os.tmpdir(), `csv-${storeId}-${Date.now()}.tmp`);
-    
-    try {
-      await sftp.fastGet(storeConfig.path, tempFilePath);
-      const csvContent = fs.readFileSync(tempFilePath, 'utf8');
-      fs.unlinkSync(tempFilePath); // Clean up temp file
-      
-      // Calculate hash for change detection
-      const hash = crypto.createHash('sha256').update(csvContent).digest('hex');
-      
-      // Update cache
-      csvCache[storeId] = {
-        content: csvContent,
-        lastModified: stats.modifyTime,
-        hash: hash,
-        lastFetch: new Date()
-      };
-      
-      console.log(`[${storeId}] CSV fetched successfully (${csvContent.length} chars, hash: ${hash.substring(0, 8)}...)`);
-      
-      return csvContent;
-    } catch (readError) {
-      if (fs.existsSync(tempFilePath)) {
-        fs.unlinkSync(tempFilePath);
-      }
-      throw readError;
-    }
+    await sftp.end();
+
+    const hash = calculateHash(csvContent);
+    const now = new Date();
+
+    // Update cache
+    csvCache[storeId] = {
+      content: csvContent,
+      hash: hash,
+      lastFetch: now,
+      lastModified: stats.modifyTime || now,
+      size: stats.size || csvContent.length
+    };
+
+    console.log(`âœ… CSV fetched successfully for store ${storeId} (${csvContent.length} bytes)`);
+    return csvContent;
   } catch (error) {
-    console.error(`[${storeId}] SFTP error:`, error.message);
+    console.error(`âŒ Error fetching CSV for store ${storeId}:`, error.message);
     throw error;
-  } finally {
-    try {
-      await sftp.end();
-    } catch (e) {
-      // Ignore disconnect errors
-    }
   }
 }
 
 /**
- * GET /stores - List all available stores
+ * Verify API key
  */
+function verifyApiKey(req, storeId) {
+  const store = stores[storeId];
+  if (!store) return false;
+
+  // Get API key from query parameter or header
+  const apiKey = req.query.apiKey || req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+  
+  // Check store-specific API key or global API key
+  const storeApiKey = store.apiKey || config.server.apiKey;
+  
+  if (!storeApiKey) {
+    // No API key configured, allow access
+    return true;
+  }
+
+  return apiKey === storeApiKey;
+}
+
+// Health check endpoint (no authentication)
+app.get('/health', (req, res) => {
+  const storeList = Object.keys(stores).map(storeId => ({
+    id: storeId,
+    name: stores[storeId].name || storeId,
+    available: csvCache[storeId].content !== null
+  }));
+
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    stores: storeList,
+    multiStore: isMultiStore
+  });
+});
+
+// List all stores
 app.get('/stores', (req, res) => {
   const storeList = Object.keys(stores).map(storeId => ({
     id: storeId,
-    name: stores[storeId].name,
-    csvPath: stores[storeId].sftp.path
+    name: stores[storeId].name || storeId,
+    endpoint: `/csv/${storeId}`,
+    available: csvCache[storeId].content !== null,
+    lastFetch: csvCache[storeId].lastFetch
   }));
-  
+
   res.json({
     stores: storeList,
     count: storeList.length
   });
 });
 
-/**
- * GET /csv/:storeId - Returns CSV file content for specific store
- */
-app.get('/csv/:storeId', authenticate, async (req, res) => {
+// Get CSV for specific store
+app.get('/csv/:storeId', async (req, res) => {
   const storeId = req.params.storeId;
-  
+
   if (!stores[storeId]) {
-    return res.status(404).json({ error: `Store '${storeId}' not found` });
+    return res.status(404).json({ error: `Store ${storeId} not found` });
   }
-  
+
+  // Verify API key
+  if (!verifyApiKey(req, storeId)) {
+    return res.status(401).json({ error: 'Unauthorized - Invalid or missing API key' });
+  }
+
   try {
     // Try to fetch fresh CSV
-    try {
-      const csvContent = await fetchCSVFromSFTP(storeId);
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('X-CSV-Hash', csvCache[storeId].hash);
-      res.setHeader('X-CSV-Last-Modified', csvCache[storeId].lastModified || '');
-      res.setHeader('X-CSV-Last-Fetch', csvCache[storeId].lastFetch.toISOString());
-      res.setHeader('X-Store-Id', storeId);
-      res.send(csvContent);
-    } catch (error) {
-      // If fetch fails but we have cached content, serve that
-      if (csvCache[storeId].content) {
-        console.warn(`[${storeId}] SFTP fetch failed, serving cached CSV: ${error.message}`);
-        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('X-CSV-Hash', csvCache[storeId].hash);
-        res.setHeader('X-CSV-Last-Modified', csvCache[storeId].lastModified || '');
-        res.setHeader('X-CSV-Last-Fetch', csvCache[storeId].lastFetch.toISOString());
-        res.setHeader('X-Store-Id', storeId);
-        res.setHeader('X-CSV-Cached', 'true');
-        res.send(csvCache[storeId].content);
-      } else {
-        // No cache available, return error
-        res.status(503).json({
-          error: 'CSV unavailable',
-          message: error.message,
-          storeId: storeId
-        });
-      }
-    }
+    await fetchCSVFromSFTP(storeId);
   } catch (error) {
-    console.error(`[${storeId}] Error serving CSV:`, error);
-    res.status(500).json({ error: 'Internal server error', message: error.message });
+    console.error(`Failed to fetch CSV for ${storeId}:`, error.message);
+    
+    // If we have cached content, use it
+    if (csvCache[storeId].content) {
+      console.log(`Using cached CSV for ${storeId}`);
+    } else {
+      return res.status(500).json({ 
+        error: 'Failed to fetch CSV from SFTP',
+        message: error.message 
+      });
+    }
   }
+
+  const cache = csvCache[storeId];
+  
+  // Set response headers
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('X-CSV-Hash', cache.hash || '');
+  res.setHeader('X-CSV-Last-Modified', cache.lastModified?.toISOString() || '');
+  res.setHeader('X-CSV-Last-Fetch', cache.lastFetch?.toISOString() || '');
+  res.setHeader('X-CSV-Size', cache.size || 0);
+
+  // Send CSV content
+  res.send(cache.content);
 });
 
-/**
- * GET /csv/:storeId/status - Returns CSV status information for specific store
- */
-app.get('/csv/:storeId/status', authenticate, (req, res) => {
+// Get CSV status for specific store
+app.get('/csv/:storeId/status', (req, res) => {
   const storeId = req.params.storeId;
-  
+
   if (!stores[storeId]) {
-    return res.status(404).json({ error: `Store '${storeId}' not found` });
+    return res.status(404).json({ error: `Store ${storeId} not found` });
   }
-  
+
   const cache = csvCache[storeId];
+
   res.json({
-    storeId: storeId,
-    storeName: stores[storeId].name,
     available: cache.content !== null,
     lastFetch: cache.lastFetch,
     lastModified: cache.lastModified,
     hash: cache.hash,
-    size: cache.content ? cache.content.length : 0,
+    size: cache.size,
     cached: cache.content !== null
   });
 });
 
-/**
- * GET /health - Health check endpoint
- */
-app.get('/health', (req, res) => {
-  const storeStatuses = {};
-  let totalAvailable = 0;
+// Legacy endpoint for single-store (backward compatibility)
+app.get('/csv', async (req, res) => {
+  // Use first store or 'default'
+  const storeId = Object.keys(stores)[0] || 'default';
   
-  Object.keys(stores).forEach(storeId => {
-    const available = csvCache[storeId].content !== null;
-    if (available) totalAvailable++;
-    storeStatuses[storeId] = {
-      name: stores[storeId].name,
-      available: available
-    };
-  });
-  
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    stores: Object.keys(stores).length,
-    available: totalAvailable,
-    storeStatuses: storeStatuses
-  });
+  // Redirect to store-specific endpoint
+  return res.redirect(`/csv/${storeId}${req.query.apiKey ? `?apiKey=${req.query.apiKey}` : ''}`);
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`\nðŸš€ SFTP Proxy Service (Multi-Store) running on port ${PORT}`);
+  console.log(`ðŸš€ SFTP Proxy Service running on port ${PORT}`);
   console.log(`ðŸ“¡ Endpoints:`);
-  console.log(`   GET /csv/:storeId - Fetch CSV file for store`);
-  console.log(`   GET /csv/:storeId/status - Get CSV status for store`);
-  console.log(`   GET /stores - List all available stores`);
   console.log(`   GET /health - Health check`);
-  console.log(`\nâš™ï¸  Configuration:`);
-  console.log(`   Stores: ${Object.keys(stores).length}`);
-  Object.keys(stores).forEach(storeId => {
-    const store = stores[storeId];
-    console.log(`   - ${storeId}: ${store.name} â†’ ${store.sftp.path}`);
-  });
-  console.log(`   API Key: ${config.server?.apiKey ? 'Enabled' : 'Disabled'}`);
-  console.log(`\nðŸ’¡ Tip: Make sure config.json is properly configured\n`);
-  
-  // Fetch CSV for all stores on startup (in background)
-  Object.keys(stores).forEach(storeId => {
-    fetchCSVFromSFTP(storeId).catch(error => {
-      console.error(`[${storeId}] Failed to fetch CSV on startup:`, error.message);
-      console.log(`[${storeId}] Service will still run, but CSV will be unavailable until SFTP connection is restored.`);
+  console.log(`   GET /stores - List all stores`);
+  if (isMultiStore) {
+    Object.keys(stores).forEach(storeId => {
+      console.log(`   GET /csv/${storeId} - Fetch CSV for ${storeId}`);
     });
-  });
+  } else {
+    console.log(`   GET /csv - Fetch CSV (legacy)`);
+  }
+  console.log(`\nðŸ” API Key: ${config.server.apiKey ? 'Configured' : 'Not set (open access)'}`);
+  console.log(`ðŸ“¦ Multi-Store: ${isMultiStore ? 'Yes' : 'No'}`);
+  console.log(`ðŸª Stores: ${Object.keys(stores).join(', ')}`);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully...');
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log('\nSIGINT received, shutting down gracefully...');
-  process.exit(0);
+// Fetch initial CSV for all stores
+Object.keys(stores).forEach(async (storeId) => {
+  try {
+    await fetchCSVFromSFTP(storeId);
+  } catch (error) {
+    console.error(`Failed to fetch initial CSV for ${storeId}:`, error.message);
+  }
 });

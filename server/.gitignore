@@ -1,0 +1,16 @@
+﻿# Dependencies
+node_modules/
+
+# Configuration files (contains passwords!)
+config.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
