@@ -1,8 +1,7 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 
 # Configuration files (contains passwords!)
-config.json
 
 # Logs
 *.log
