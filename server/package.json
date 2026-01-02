@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "sftp-proxy",
   "version": "1.0.0",
   "description": "SFTP Proxy Server for Chrome Extension - Fetches CSV files from SFTP and serves via HTTP",
