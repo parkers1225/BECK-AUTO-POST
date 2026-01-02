@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SFTP Proxy Server
  * Fetches CSV files from SFTP server and serves them via HTTP
  * Supports multi-store configuration
@@ -24,31 +24,57 @@ app.use((req, res, next) => {
   next();
 });
 
-// Load configuration from environment variables or config file
+// Load configuration from config.json file (supports multi-store)
 let config = {};
 
-// Try to load from environment variables first (for Railway)
-if (process.env.SFTP_HOST) {
-  // Single store from environment variables
-  config = {
-    sftp: {
-      host: process.env.SFTP_HOST,
-      port: parseInt(process.env.SFTP_PORT) || 22,
-      username: process.env.SFTP_USERNAME,
-      password: process.env.SFTP_PASSWORD,
-      path: process.env.SFTP_PATH || '/MP15932.csv'
-    },
-    server: {
-      port: PORT,
-      apiKey: process.env.API_KEY || ''
+try {
+  const configPath = path.join(__dirname, 'config.json');
+  if (fs.existsSync(configPath)) {
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    
+    // If environment variables are set, override SFTP credentials for all stores
+    if (process.env.SFTP_HOST) {
+      // Override SFTP credentials in all stores
+      if (config.stores) {
+        // Multi-store configuration
+        Object.keys(config.stores).forEach(storeId => {
+          if (config.stores[storeId].sftp) {
+            config.stores[storeId].sftp.host = process.env.SFTP_HOST || config.stores[storeId].sftp.host;
+            config.stores[storeId].sftp.port = parseInt(process.env.SFTP_PORT) || config.stores[storeId].sftp.port || 22;
+            config.stores[storeId].sftp.username = process.env.SFTP_USERNAME || config.stores[storeId].sftp.username;
+            config.stores[storeId].sftp.password = process.env.SFTP_PASSWORD || config.stores[storeId].sftp.password;
+          }
+        });
+        console.log('âœ… Loaded multi-store configuration with environment variable overrides');
+      } else if (config.sftp) {
+        // Single-store configuration
+        config.sftp.host = process.env.SFTP_HOST || config.sftp.host;
+        config.sftp.port = parseInt(process.env.SFTP_PORT) || config.sftp.port || 22;
+        config.sftp.username = process.env.SFTP_USERNAME || config.sftp.username;
+        config.sftp.password = process.env.SFTP_PASSWORD || config.sftp.password;
+        config.sftp.path = process.env.SFTP_PATH || config.sftp.path;
+        console.log('âœ… Loaded single-store configuration with environment variable overrides');
+      }
+    } else {
+      console.log('âœ… Loaded configuration from config.json (no environment variable overrides)');
     }
-  };
-} else {
-  // Try to load from config.json file
-  try {
-    const configPath = path.join(__dirname, 'config.json');
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } else {
+    // No config.json, try environment variables for single store
+    if (process.env.SFTP_HOST) {
+      config = {
+        sftp: {
+          host: process.env.SFTP_HOST,
+          port: parseInt(process.env.SFTP_PORT) || 22,
+          username: process.env.SFTP_USERNAME,
+          password: process.env.SFTP_PASSWORD,
+          path: process.env.SFTP_PATH || '/MP15932.csv'
+        },
+        server: {
+          port: PORT,
+          apiKey: process.env.API_KEY || ''
+        }
+      };
+      console.log('âœ… Loaded single-store configuration from environment variables');
     } else {
       console.warn('âš ï¸  No config.json found and no environment variables set. Using defaults.');
       config = {
@@ -65,9 +91,12 @@ if (process.env.SFTP_HOST) {
         }
       };
     }
-  } catch (error) {
-    console.error('âŒ Error loading config:', error.message);
-    process.exit(1);
+  }
+} catch (error) {
+  console.error('âŒ Error loading config:', error.message);
+  process.exit(1);
+}
+}
   }
 }
 
@@ -122,7 +151,7 @@ async function fetchCSVFromSFTP(storeId) {
   const sftp = new Client();
 
   try {
-    console.log(`ðŸ“¡ Connecting to SFTP: ${sftpConfig.host} for store ${storeId}...`);
+    console.log(`ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â¡ Connecting to SFTP: ${sftpConfig.host} for store ${storeId}...`);
     await sftp.connect({
       host: sftpConfig.host,
       port: sftpConfig.port || 22,
@@ -130,7 +159,7 @@ async function fetchCSVFromSFTP(storeId) {
       password: sftpConfig.password
     });
 
-    console.log(`ðŸ“¥ Fetching CSV: ${sftpConfig.path} for store ${storeId}...`);
+    console.log(`ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â¥ Fetching CSV: ${sftpConfig.path} for store ${storeId}...`);
     const csvContent = await sftp.get(sftpConfig.path, false, { encoding: 'utf8' });
     
     // Get file stats
@@ -150,10 +179,10 @@ async function fetchCSVFromSFTP(storeId) {
       size: stats.size || csvContent.length
     };
 
-    console.log(`âœ… CSV fetched successfully for store ${storeId} (${csvContent.length} bytes)`);
+    console.log(`ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ CSV fetched successfully for store ${storeId} (${csvContent.length} bytes)`);
     return csvContent;
   } catch (error) {
-    console.error(`âŒ Error fetching CSV for store ${storeId}:`, error.message);
+    console.error(`ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ Error fetching CSV for store ${storeId}:`, error.message);
     throw error;
   }
 }
@@ -285,8 +314,8 @@ app.get('/csv', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`ðŸš€ SFTP Proxy Service running on port ${PORT}`);
-  console.log(`ðŸ“¡ Endpoints:`);
+  console.log(`ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ SFTP Proxy Service running on port ${PORT}`);
+  console.log(`ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â¡ Endpoints:`);
   console.log(`   GET /health - Health check`);
   console.log(`   GET /stores - List all stores`);
   if (isMultiStore) {
@@ -296,9 +325,9 @@ app.listen(PORT, () => {
   } else {
     console.log(`   GET /csv - Fetch CSV (legacy)`);
   }
-  console.log(`\nðŸ” API Key: ${config.server.apiKey ? 'Configured' : 'Not set (open access)'}`);
-  console.log(`ðŸ“¦ Multi-Store: ${isMultiStore ? 'Yes' : 'No'}`);
-  console.log(`ðŸª Stores: ${Object.keys(stores).join(', ')}`);
+  console.log(`\nÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€šÃ‚Â API Key: ${config.server.apiKey ? 'Configured' : 'Not set (open access)'}`);
+  console.log(`ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â¦ Multi-Store: ${isMultiStore ? 'Yes' : 'No'}`);
+  console.log(`ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Âª Stores: ${Object.keys(stores).join(', ')}`);
 });
 
 // Fetch initial CSV for all stores
