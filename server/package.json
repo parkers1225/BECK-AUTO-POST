@@ -1,0 +1,30 @@
+{
+  "name": "sftp-csv-proxy",
+  "version": "1.0.0",
+  "description": "HTTP proxy service that fetches CSV files from SFTP and serves them via HTTP/HTTPS",
+  "main": "sftp-proxy.js",
+  "scripts": {
+    "start": "node sftp-proxy.js",
+    "dev": "nodemon sftp-proxy.js"
+  },
+  "keywords": [
+    "sftp",
+    "csv",
+    "proxy",
+    "http"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "ssh2-sftp-client": "^10.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
+
+

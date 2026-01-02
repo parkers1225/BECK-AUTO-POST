@@ -1,0 +1,11 @@
+# Exclude server directory and node_modules from extension packaging
+server/
+**/node_modules/
+**/*.pem
+**/test/
+**/tests/
+**/__tests__/
+**/*.test.js
+**/*.spec.js
+
+

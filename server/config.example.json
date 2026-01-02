@@ -1,0 +1,15 @@
+{
+  "sftp": {
+    "host": "sftp.example.com",
+    "port": 22,
+    "username": "your-username",
+    "password": "your-password",
+    "path": "/path/to/vehicles.csv"
+  },
+  "server": {
+    "port": 3000,
+    "apiKey": "optional-api-key-for-authentication"
+  }
+}
+
+

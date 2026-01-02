@@ -1,0 +1,52 @@
+﻿{
+  "stores": {
+    "beck-cdjr": {
+      "name": "BECK CDJR",
+      "sftp": {
+        "host": "sftp.transfer.vauto.com",
+        "port": 22,
+        "username": "beckcdj",
+        "password": "BT7rSjaJ0zZk@GF",
+        "path": "/MP15932.csv"
+      },
+      "apiKey": "beck-cdjr-secret-key"
+    },
+    "beck-chevy": {
+      "name": "BECK CHEVY",
+      "sftp": {
+        "host": "sftp.transfer.vauto.com",
+        "port": 22,
+        "username": "beckcdj",
+        "password": "BT7rSjaJ0zZk@GF",
+        "path": "/MP15933.csv"
+      },
+      "apiKey": "beck-chevy-secret-key"
+    },
+    "beck-ford": {
+      "name": "BECK FORD",
+      "sftp": {
+        "host": "sftp.transfer.vauto.com",
+        "port": 22,
+        "username": "beckcdj",
+        "password": "BT7rSjaJ0zZk@GF",
+        "path": "/MP15935.csv"
+      },
+      "apiKey": "beck-ford-secret-key"
+    },
+    "beck-nissan": {
+      "name": "BECK NISSAN",
+      "sftp": {
+        "host": "sftp.transfer.vauto.com",
+        "port": 22,
+        "username": "beckcdj",
+        "password": "BT7rSjaJ0zZk@GF",
+        "path": "/MP15931.csv"
+      },
+      "apiKey": "beck-nissan-secret-key"
+    }
+  },
+  "server": {
+    "port": 3000,
+    "apiKey": "becksecretkey"
+  }
+}
