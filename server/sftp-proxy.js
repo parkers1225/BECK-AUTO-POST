@@ -157,8 +157,8 @@ async function fetchCSVFromSFTP(storeId) {
     });
 
     console.log(`ðŸ“¥ Fetching CSV: ${sftpConfig.path} for store ${storeId}...`);
-    // Get file content (returns Buffer)
-    const csvContent = await sftp.get(sftpConfig.path);
+    // Get file content (returns Buffer) - pass null as second param to get content instead of saving to file
+    const csvContent = await sftp.get(sftpConfig.path, null);
     
     // Convert to string if it's a Buffer
     const csvString = Buffer.isBuffer(csvContent) ? csvContent.toString('utf8') : csvContent;
