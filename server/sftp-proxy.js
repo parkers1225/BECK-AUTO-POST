@@ -176,7 +176,7 @@ async function fetchCSVFromSFTP(storeId) {
       content: csvString,
       hash: hash,
       lastFetch: now,
-      lastModified: stats.modifyTime || now,
+      lastModified: stats.modifyTime ? (typeof stats.modifyTime === 'number' ? new Date(stats.modifyTime) : stats.modifyTime) : now,
       size: stats.size || csvString.length
     };
 
@@ -276,7 +276,7 @@ app.get('/csv/:storeId', async (req, res) => {
   // Set response headers
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('X-CSV-Hash', cache.hash || '');
-  res.setHeader('X-CSV-Last-Modified', cache.lastModified?.toISOString() || '');
+  res.setHeader('X-CSV-Last-Modified', (cache.lastModified instanceof Date ? cache.lastModified.toISOString() : (cache.lastModified ? new Date(cache.lastModified).toISOString() : '')));
   res.setHeader('X-CSV-Last-Fetch', cache.lastFetch?.toISOString() || '');
   res.setHeader('X-CSV-Size', cache.size || 0);
 
