@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Logo Transparency Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: linear-gradient(135deg, #1877f2 0%, #42a5f5 100%);
+      min-height: 100vh;
+    }
+    .test-container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .test-box {
+      background: linear-gradient(135deg, #1877f2 0%, #42a5f5 100%);
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .test-box h3 {
+      color: white;
+      margin-bottom: 15px;
+    }
+    .logo-test {
+      height: 64px;
+      width: auto;
+      display: block;
+      margin: 0 auto;
+      background: transparent;
+    }
+    .checkered {
+      background-image: 
+        linear-gradient(45deg, #ccc 25%, transparent 25%),
+        linear-gradient(-45deg, #ccc 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #ccc 75%),
+        linear-gradient(-45deg, transparent 75%, #ccc 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    .status {
+      margin-top: 15px;
+      padding: 10px;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    .status.good {
+      background: #d4edda;
+      color: #155724;
+    }
+    .status.bad {
+      background: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+  <div class="test-container">
+    <h1>Logo Transparency Test</h1>
+    <p>This page helps you verify if your logo has true transparency.</p>
+    
+    <div class="test-box">
+      <h3>Test 1: Over Blue Gradient (Extension Header Style)</h3>
+      <img src="icons/beck-logo.png" alt="Logo" class="logo-test" id="logo1">
+      <div id="status1" class="status"></div>
+    </div>
+    
+    <div class="checkered">
+      <h3>Test 2: Over Checkered Background (True Transparency Test)</h3>
+      <img src="icons/beck-logo.png" alt="Logo" class="logo-test" id="logo2">
+      <div id="status2" class="status"></div>
+    </div>
+    
+    <div style="background: white; padding: 20px; border-radius: 8px; margin-top: 20px;">
+      <h3>Test 3: Over White Background</h3>
+      <img src="icons/beck-logo.png" alt="Logo" class="logo-test" id="logo3">
+      <div id="status3" class="status"></div>
+    </div>
+    
+    <div style="margin-top: 30px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+      <h3>Instructions:</h3>
+      <ul style="text-align: left;">
+        <li><strong>Test 1:</strong> Should show logo clearly over blue gradient (like in extension)</li>
+        <li><strong>Test 2:</strong> If you see checkered pattern through the logo, it has transparency ✓</li>
+        <li><strong>Test 3:</strong> If logo disappears or blends into white, it has transparency ✓</li>
+        <li>If you see a white/colored box around the logo in any test, the PNG doesn't have true transparency</li>
+      </ul>
+    </div>
+  </div>
+  
+  <script>
+    function checkTransparency(img, statusId) {
+      const status = document.getElementById(statusId);
+      img.onload = function() {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        ctx.drawImage(img, 0, 0);
+        
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        let transparentPixels = 0;
+        let totalPixels = data.length / 4;
+        
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] === 0) { // Alpha channel is 0
+            transparentPixels++;
+          }
+        }
+        
+        const transparencyPercent = (transparentPixels / totalPixels * 100).toFixed(1);
+        
+        if (transparencyPercent > 10) {
+          status.textContent = `✓ Has transparency (${transparencyPercent}% transparent pixels)`;
+          status.className = 'status good';
+        } else {
+          status.textContent = `✗ No transparency detected (only ${transparencyPercent}% transparent pixels)`;
+          status.className = 'status bad';
+        }
+      };
+      
+      img.onerror = function() {
+        status.textContent = '✗ Image not found at icons/beck-logo.png';
+        status.className = 'status bad';
+      };
+    }
+    
+    // Check all three test images
+    checkTransparency(document.getElementById('logo1'), 'status1');
+    checkTransparency(document.getElementById('logo2'), 'status2');
+    checkTransparency(document.getElementById('logo3'), 'status3');
+  </script>
+</body>
+</html>
+
+

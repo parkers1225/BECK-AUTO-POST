@@ -1,0 +1,51 @@
+{
+  "stores": [
+    {
+      "id": "store-001",
+      "name": "Beck Auto - Downtown",
+      "location": "Dallas, TX",
+      "sftp": {
+        "host": "sftp.transfer.vauto.com",
+        "port": 22,
+        "username": "beckcdj",
+        "password": "YOUR_PASSWORD",
+        "path": "/MP15932.csv"
+      },
+      "proxy": {
+        "port": 3000,
+        "apiKey": "store-001-secret-key-change-this"
+      },
+      "network": {
+        "localIP": "10.26.1.230",
+        "notes": "Store's local network IP address"
+      }
+    },
+    {
+      "id": "store-002",
+      "name": "Beck Auto - North",
+      "location": "Plano, TX",
+      "sftp": {
+        "host": "sftp.transfer.vauto.com",
+        "port": 22,
+        "username": "beckcdj",
+        "password": "YOUR_PASSWORD",
+        "path": "/MP15933.csv"
+      },
+      "proxy": {
+        "port": 3000,
+        "apiKey": "store-002-secret-key-change-this"
+      },
+      "network": {
+        "localIP": "10.26.2.150",
+        "notes": "Store's local network IP address"
+      }
+    }
+  ],
+  "_instructions": {
+    "usage": "Copy this file to stores-config.json and fill in store-specific values",
+    "generate_config": "Run: node server/generate-store-config.js <store-id>",
+    "security": "Never commit stores-config.json to version control - it contains passwords!"
+  }
+}
+
+
