@@ -12,7 +12,9 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 // CORS middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -314,6 +316,46 @@ app.get('/csv', async (req, res) => {
 });
 
 // Start server
+// Image proxy endpoint - fetches images from external URLs and serves them through HTTPS
+app.get('/image-proxy', async (req, res) => {
+  const imageUrl = req.query.url;
+
+  if (!imageUrl) {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+
+  try {
+    // Parse the URL to determine if it's HTTP or HTTPS
+    const url = new URL(imageUrl);
+    const isHttps = url.protocol === 'https:';
+    const httpModule = isHttps ? https : http;
+
+    // Fetch the image
+    httpModule.get(imageUrl, (imageResponse) => {
+      // Check if request was successful
+      if (imageResponse.statusCode !== 200) {
+        return res.status(imageResponse.statusCode).json({ 
+          error: `Failed to fetch image: ${imageResponse.statusCode}` 
+        });
+      }
+
+      // Set appropriate headers
+      const contentType = imageResponse.headers['content-type'] || 'image/jpeg';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      
+      // Stream the image data
+      imageResponse.pipe(res);
+    }).on('error', (error) => {
+      console.error('Error fetching image:', error);
+      res.status(500).json({ error: 'Failed to fetch image', message: error.message });
+    });
+  } catch (error) {
+    console.error('Error parsing image URL:', error);
+    res.status(400).json({ error: 'Invalid image URL', message: error.message });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ðŸš€ SFTP Proxy Service running on port ${PORT}`);
   console.log(`ðŸ“‹ Endpoints:`);
@@ -329,6 +371,7 @@ app.listen(PORT, () => {
   console.log(`\nðŸ” API Key: ${config.server.apiKey ? 'Configured' : 'Not set (open access)'}`);
   console.log(`ðŸª Multi-Store: ${isMultiStore ? 'Yes' : 'No'}`);
   console.log(`ðŸ“¦ Stores: ${Object.keys(stores).join(', ')}`);
+  console.log(`   GET /image-proxy?url=... - Image proxy endpoint`);
 });
 
 // Fetch initial CSV for all stores
