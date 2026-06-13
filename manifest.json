@@ -9,16 +9,15 @@
     "scripting",
     "sidePanel",
     "alarms",
-    "permissions"
+    "permissions",
+    "downloads"
   ],
   "host_permissions": [
     "https://www.facebook.com/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
     "http://vehicle-photos-published.vauto.com/*",
-    "https://vehicle-photos-published.vauto.com/*"
-  ],
-  "optional_host_permissions": [
+    "https://vehicle-photos-published.vauto.com/*",
     "http://*/*",
     "https://*/*"
   ],

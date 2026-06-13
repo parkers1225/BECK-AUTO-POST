@@ -142,11 +142,15 @@ function setupLogo() {
   // Store original src for fallback
   const originalSrc = logo.src;
   
+  // Guard flag to prevent infinite loop (setting src re-triggers onload)
+  let logoProcessed = false;
+  
   // Handle logo load success
   const handleLogoLoad = async function() {
+    if (logoProcessed) return; // Already processed, don't loop
+    logoProcessed = true;
     try {
       console.log('Logo loaded, dimensions:', logo.naturalWidth, 'x', logo.naturalHeight);
-      console.log('Logo src:', logo.src);
       
       // Try to process image to remove white background
       console.log('Processing logo for transparency...');
@@ -156,27 +160,23 @@ function setupLogo() {
       // Create new image to load processed version
       const processedImg = new Image();
       processedImg.onload = function() {
-        console.log('Processed logo loaded, applying...');
+        console.log('✓ Transparent logo applied successfully');
         logo.src = processedDataUrl;
         logo.style.display = 'block';
         logo.style.opacity = '1';
         logo.offsetHeight; // Trigger reflow
-        console.log('✓ Transparent logo applied successfully');
       };
       
       processedImg.onerror = function() {
         console.warn('Processed logo failed to load, using CSS mix-blend-mode fallback');
         logo.style.display = 'block';
         logo.style.opacity = '1';
-        // CSS mix-blend-mode: multiply will handle white background removal
       };
       
       processedImg.src = processedDataUrl;
       
     } catch (error) {
       console.error('Error processing logo:', error);
-      // Fallback: Use CSS mix-blend-mode which should handle white backgrounds
-      console.log('Using CSS mix-blend-mode fallback for transparency');
       logo.style.display = 'block';
       logo.style.opacity = '1';
     }
@@ -372,8 +372,22 @@ async function loadSettings() {
       'autoRefreshEnabled', 
       'autoRefreshInterval',
       'lastCSVUpdate',
-      'lastCSVHash'
+      'lastCSVHash',
+      'dealerWebsiteUrls'
     ]);
+    
+    // Load dealer website URLs
+    if (storage.dealerWebsiteUrls) {
+      const urlsTextarea = document.getElementById('dealerWebsiteUrls');
+      if (urlsTextarea) {
+        const urls = Array.isArray(storage.dealerWebsiteUrls) ? storage.dealerWebsiteUrls : [storage.dealerWebsiteUrls];
+        urlsTextarea.value = urls.join('\n');
+      }
+    } else if (storage.dealerWebsiteUrl) {
+      // Migrate from old single-URL format
+      const urlsTextarea = document.getElementById('dealerWebsiteUrls');
+      if (urlsTextarea) urlsTextarea.value = storage.dealerWebsiteUrl;
+    }
     
     // Set CSV source
     const csvSourceUrlEl = document.getElementById('csvSourceUrl');
@@ -446,6 +460,12 @@ async function saveSettings() {
   const autoRefreshEnabled = document.getElementById('autoRefreshEnabled').checked;
   const autoRefreshInterval = parseInt(document.getElementById('autoRefreshInterval').value) || 15;
   
+  // Parse dealer URLs from textarea (one per line)
+  const dealerWebsiteUrls = (document.getElementById('dealerWebsiteUrls')?.value || '')
+    .split('\n')
+    .map(u => u.trim().replace(/\/+$/, ''))
+    .filter(u => u.length > 0);
+  
   // Validate CSV URL if using URL source
   if (csvSource === 'url' && !csvUrl) {
     showStatus('csvStatus', 'Please enter a CSV URL', 'error');
@@ -465,7 +485,8 @@ async function saveSettings() {
         csvApiKey,
         csvSource,
         autoRefreshEnabled,
-        autoRefreshInterval
+        autoRefreshInterval,
+        dealerWebsiteUrls
       }
     });
     
@@ -1135,6 +1156,104 @@ function createPhotoItem(imageSrc, vehicle, file = null) {
   return item;
 }
 
+/**
+ * Fetch all vehicle photos from the dealer website by VIN.
+ * Runs asynchronously after a vehicle is selected — updates selectedPhotoData when done.
+ */
+async function fetchDealerPhotos(vin, photoElement, csvUrls, file) {
+  try {
+    const storage = await chrome.storage.local.get(['dealerWebsiteUrls', 'dealerWebsiteUrl']);
+    
+    // Support both new array format and legacy single-URL format
+    let dealerUrls = storage.dealerWebsiteUrls || [];
+    if (!Array.isArray(dealerUrls)) dealerUrls = [dealerUrls];
+    if (dealerUrls.length === 0 && storage.dealerWebsiteUrl) {
+      dealerUrls = [storage.dealerWebsiteUrl];
+    }
+    dealerUrls = dealerUrls.filter(u => u && u.length > 0);
+    
+    if (dealerUrls.length === 0) {
+      console.log('No dealer website URLs configured — using CSV photos only');
+      showStatus('photoStatus', '⚠️ No dealer URLs configured. Add them in Settings to get all photos.', 'info');
+      return;
+    }
+    
+    showStatus('photoStatus', `🔍 Searching ${dealerUrls.length} dealer site(s) for photos...`, 'info');
+    
+    // Show loading badge on the photo element
+    let badge = photoElement.querySelector('.dealer-photo-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'dealer-photo-badge';
+      badge.style.cssText = 'position:absolute;bottom:4px;left:4px;background:rgba(0,0,0,0.8);color:#fbbf24;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;z-index:10;';
+      photoElement.style.position = 'relative';
+      photoElement.appendChild(badge);
+    }
+    badge.textContent = `⏳ Fetching photos (${dealerUrls.length} site${dealerUrls.length > 1 ? 's' : ''})...`;
+    
+    console.log(`Fetching dealer photos for VIN ${vin} from ${dealerUrls.length} site(s)...`);
+    
+    // Try each dealer URL until we find photos
+    let foundPhotos = [];
+    let matchedUrl = null;
+    
+    for (const dealerUrl of dealerUrls) {
+      try {
+        console.log(`  Trying ${dealerUrl}...`);
+        const response = await chrome.runtime.sendMessage({
+          action: 'fetchDealerPhotos',
+          data: { vin, dealerUrl }
+        });
+        
+        if (response?.success && response.photoUrls?.length > 0) {
+          foundPhotos = response.photoUrls;
+          matchedUrl = dealerUrl;
+          console.log(`  ✓ Found ${foundPhotos.length} photos on ${dealerUrl}`);
+          break; // Found photos, no need to try more sites
+        } else {
+          console.log(`  ✗ No photos on ${dealerUrl}: ${response?.error || 'empty'}`);
+        }
+      } catch (err) {
+        console.warn(`  ✗ Error fetching from ${dealerUrl}:`, err.message);
+      }
+    }
+    
+    if (foundPhotos.length === 0) {
+      console.warn('No dealer photos found on any configured site');
+      badge.textContent = '📷 ' + csvUrls.length + ' photos (CSV only)';
+      badge.style.color = '#94a3b8';
+      showStatus('photoStatus', '⚠️ No photos found on dealer websites for this VIN.', 'info');
+      return;
+    }
+    
+    // Merge dealer photos with CSV photos, dedup
+    const allUrls = [...new Set([...csvUrls, ...foundPhotos])];
+    console.log(`Dealer photos: ${foundPhotos.length} from ${matchedUrl}, ${allUrls.length} total`);
+    
+    // Update stored photo data
+    chrome.storage.local.set({
+      selectedPhotoData: {
+        hasFile: !!file,
+        imageUrl: allUrls[0] || null,
+        imageUrls: allUrls,
+        vin: vin
+      }
+    });
+    
+    // Update badge
+    badge.textContent = `📷 ${allUrls.length} photos`;
+    badge.style.color = '#34d399';
+    showStatus('photoStatus', `✅ Found ${foundPhotos.length} photos from dealer website!`, 'success');
+    
+    // Auto-hide after 6s
+    setTimeout(() => { badge.style.opacity = '0.5'; }, 6000);
+    
+  } catch (error) {
+    console.error('Failed to fetch dealer photos:', error);
+    showStatus('photoStatus', `❌ Dealer photo fetch error: ${error.message}`, 'error');
+  }
+}
+
 function selectPhoto(photoElement, vehicle, file) {
   // Remove previous selection
   document.querySelectorAll('.photo-item').forEach(item => {
@@ -1146,15 +1265,36 @@ function selectPhoto(photoElement, vehicle, file) {
   selectedVehicle = vehicle;
   selectedPhoto = file;
   
-  // Store photo data for content script
-  // Store both the file (if available) and imageUrl
+  // Build base image URLs from CSV
+  const csvUrls = vehicle.imageUrls || (vehicle.imageUrl ? [vehicle.imageUrl] : []);
+  
+  // Store CSV-only data immediately so the form can be filled while dealer photos load
   chrome.storage.local.set({
     selectedPhotoData: {
       hasFile: !!file,
-      imageUrl: vehicle.imageUrl || null,
+      imageUrl: vehicle.imageUrl || csvUrls[0] || null,
+      imageUrls: csvUrls,
       vin: vehicle.vin
     }
   });
+  
+  // Show photo count badge immediately with CSV count
+  if (csvUrls.length > 0) {
+    let badge = photoElement.querySelector('.dealer-photo-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'dealer-photo-badge';
+      badge.style.cssText = 'position:absolute;bottom:4px;left:4px;background:rgba(0,0,0,0.8);color:#38bdf8;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;z-index:10;';
+      photoElement.style.position = 'relative';
+      photoElement.appendChild(badge);
+    }
+    badge.textContent = `📷 ${csvUrls.length} photos`;
+  }
+  
+  // Auto-fetch MORE photos from dealer website (async, non-blocking)
+  if (vehicle.vin) {
+    fetchDealerPhotos(vehicle.vin, photoElement, csvUrls, file);
+  }
   
   // Collapse the photo gallery - remove all vehicles except the selected one from DOM
   const gallery = document.getElementById('photoGallery');
@@ -1391,11 +1531,17 @@ async function generateDescription() {
   }
 }
 
-function copyDescription() {
+async function copyDescription() {
   const textarea = document.getElementById('generatedDescription');
-  textarea.select();
-  document.execCommand('copy');
-  showStatus('photoStatus', 'Description copied to clipboard', 'success');
+  try {
+    await navigator.clipboard.writeText(textarea.value);
+    showStatus('photoStatus', 'Description copied to clipboard', 'success');
+  } catch (error) {
+    // Fallback for older browsers
+    textarea.select();
+    document.execCommand('copy');
+    showStatus('photoStatus', 'Description copied to clipboard', 'success');
+  }
 }
 
 function openMarketplace() {

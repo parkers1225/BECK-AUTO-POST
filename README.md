@@ -83,30 +83,38 @@ Your CSV file should contain vehicle data with the following columns:
 ## File Structure
 
 ```
-fb-marketplace-extension/
-├── manifest.json          # Extension manifest
-├── popup.html             # Extension popup UI
-├── popup.css              # Popup styling
-├── popup.js               # Popup logic
+BECK-AUTO-POST/
+├── manifest.json          # Extension manifest (Manifest V3, side panel)
+├── popup.html             # Extension side-panel UI
+├── popup.css              # UI styling
+├── popup.js               # UI logic
 ├── content.js             # Content script for Facebook Marketplace
 ├── background.js          # Background service worker
+├── privacy-policy.html    # Privacy policy
 ├── utils/
 │   ├── csvParser.js       # CSV parsing utility
 │   ├── vinMatcher.js      # VIN extraction utility
 │   └── aiService.js       # AI description generation
 ├── icons/
-│   └── icon-*.png         # Extension icons (create these)
+│   └── beck-logo.png      # Extension icon (used for all sizes)
+├── server/                # SFTP proxy server (see server/README.md)
+├── package.json           # Root deploy wrapper (runs the server)
+├── railway.json           # Railway deployment config
 └── README.md              # This file
 ```
 
-## Creating Extension Icons
+## Server (SFTP Proxy)
 
-You need to create icon files for the extension:
-- `icons/icon-16.png` (16x16 pixels)
-- `icons/icon-48.png` (48x48 pixels)
-- `icons/icon-128.png` (128x128 pixels)
+The extension pulls vehicle CSV feeds and photos through a small Node/Express
+proxy in [`server/`](server/). It connects to the dealership vAuto SFTP feeds,
+caches the CSVs, and serves them over HTTP to the extension (the browser can't
+talk SFTP directly). It supports multiple stores from a single deployment.
 
-You can use any image editor to create these icons. A simple car/vehicle icon works well.
+Store definitions live in `server/config.json`; **SFTP credentials are supplied
+at deploy time via environment variables** (`SFTP_HOST`, `SFTP_USERNAME`,
+`SFTP_PASSWORD`, or a full `STORES_CONFIG`) — never commit real credentials to
+the tracked `config.json`. See [`server/README.md`](server/README.md) for setup
+and deployment (Railway / Docker) details.
 
 ## Troubleshooting
 

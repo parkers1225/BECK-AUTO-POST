@@ -117,8 +117,16 @@ class CSVParser {
         vehicle.interiorColor = value;
       } else if (cleanHeader === 'description' || cleanHeader === 'offer_description') {
         vehicle.description = value;
-      } else if (cleanHeader.includes('image[0].url') || cleanHeader.includes('image.url')) {
-        vehicle.imageUrl = value;
+      } else if (cleanHeader.match(/^image\[\d+\]\.url$/) || cleanHeader.includes('image.url')) {
+        // Capture ALL image URLs (image[0].url, image[1].url, ..., image[N].url)
+        if (!vehicle.imageUrls) vehicle.imageUrls = [];
+        if (value && value.trim()) {
+          vehicle.imageUrls.push(value.trim());
+        }
+        // Keep first image as imageUrl for backward compatibility
+        if (!vehicle.imageUrl && value && value.trim()) {
+          vehicle.imageUrl = value.trim();
+        }
       } else if (cleanHeader === 'address') {
         vehicle.address = value;
       } else if (cleanHeader === 'transmission') {

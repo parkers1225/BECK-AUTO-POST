@@ -1,8 +1,15 @@
+# Dependencies
+node_modules/
+
 # Server files (not part of extension)
 server/node_modules/
 server/config.json
 server/*.log
 server/.env
+
+# Environment files
+.env
+.env.local
 
 # OS files
 .DS_Store

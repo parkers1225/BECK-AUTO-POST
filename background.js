@@ -43,6 +43,22 @@ async function handleMessage(request, sender, sendResponse) {
         await handleFetchImage(request.data, sendResponse);
         break;
       
+      case 'downloadPhotos':
+        await handleDownloadPhotos(request.data, sendResponse);
+        break;
+      
+      case 'fetchDealerPhotos':
+        await handleFetchDealerPhotos(request.data, sendResponse);
+        break;
+      
+      case 'storeScrapedPhotos':
+        await handleStoreScrapedPhotos(request.data, sendResponse);
+        break;
+      
+      case 'getScrapedPhotos':
+        await handleGetScrapedPhotos(request.data, sendResponse);
+        break;
+      
       default:
         sendResponse({ success: false, error: 'Unknown action' });
     }
@@ -180,7 +196,7 @@ async function generateWithOpenAI(apiKey, prompt) {
       'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: 'gpt-4',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -217,7 +233,7 @@ async function generateWithAnthropic(apiKey, prompt) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-3-opus-20240229',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 1000,
       messages: [
         {
@@ -289,6 +305,9 @@ async function handleSaveSettings(data, sendResponse) {
     }
     if (data.autoRefreshInterval !== undefined) {
       settingsToSave.autoRefreshInterval = data.autoRefreshInterval;
+    }
+    if (data.dealerWebsiteUrls !== undefined) {
+      settingsToSave.dealerWebsiteUrls = data.dealerWebsiteUrls;
     }
     
     await chrome.storage.local.set(settingsToSave);
@@ -383,10 +402,22 @@ async function handleFetchImage(data, sendResponse) {
 
     console.log('Background: Fetching image from:', imageUrl);
     
-    // Request permission for this URL if needed
-    const hasPermission = await requestHostPermission(imageUrl);
-    if (!hasPermission) {
-      sendResponse({ success: false, error: 'Permission denied to access image URL' });
+    // Validate URL is http/https (basic SSRF protection)
+    try {
+      const urlObj = new URL(imageUrl);
+      if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+        sendResponse({ success: false, error: 'Invalid URL protocol - must be http or https' });
+        return;
+      }
+      // Block obvious SSRF targets (private IPs, localhost)
+      const hostname = urlObj.hostname.toLowerCase();
+      if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' ||
+          hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.')) {
+        sendResponse({ success: false, error: 'Cannot fetch from private network addresses' });
+        return;
+      }
+    } catch (urlError) {
+      sendResponse({ success: false, error: 'Invalid image URL: ' + urlError.message });
       return;
     }
     
@@ -437,6 +468,365 @@ async function handleFetchImage(data, sendResponse) {
     console.error('Background: Error fetching image:', error);
     sendResponse({ success: false, error: error.message || 'Unknown error fetching image' });
   }
+}
+
+/**
+ * Download photos to user's Downloads folder as fallback for manual upload
+ */
+async function handleDownloadPhotos(data, sendResponse) {
+  try {
+    const { urls, vin } = data;
+    if (!urls || urls.length === 0) {
+      sendResponse({ success: false, error: 'No URLs provided' });
+      return;
+    }
+
+    let downloadCount = 0;
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const url = urls[i];
+        const ext = url.match(/\.(jpg|jpeg|png|webp|gif)/i)?.[1] || 'jpg';
+        const filename = `beck_auto_${vin}_photo_${i + 1}.${ext}`;
+        
+        await chrome.downloads.download({
+          url: url,
+          filename: filename,
+          saveAs: false,
+          conflictAction: 'uniquify'
+        });
+        downloadCount++;
+      } catch (dlErr) {
+        console.warn(`Background: Failed to download photo ${i + 1}:`, dlErr.message);
+      }
+    }
+
+    sendResponse({ success: downloadCount > 0, count: downloadCount });
+  } catch (error) {
+    console.error('Background: Error downloading photos:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+/**
+ * Store scraped photos from vAuto page by VIN
+ */
+async function handleStoreScrapedPhotos(data, sendResponse) {
+  try {
+    const { vin, photoUrls, timestamp, source } = data;
+    if (!photoUrls || photoUrls.length === 0) {
+      sendResponse({ success: false, error: 'No photo URLs provided' });
+      return;
+    }
+
+    const existing = await chrome.storage.local.get(['scrapedPhotos']);
+    const scrapedPhotos = existing.scrapedPhotos || {};
+
+    if (vin) {
+      // Merge with existing photos for this VIN (dedup)
+      const prev = scrapedPhotos[vin]?.urls || [];
+      const merged = [...new Set([...prev, ...photoUrls])];
+      scrapedPhotos[vin] = { urls: merged, timestamp, source };
+    }
+
+    // Always store as _lastScraped so popup can offer a manual VIN match
+    scrapedPhotos._lastScraped = { urls: photoUrls, timestamp, source, vin: vin || null };
+
+    await chrome.storage.local.set({ scrapedPhotos });
+    console.log(`Background: Stored ${photoUrls.length} scraped photos${vin ? ` for VIN ${vin}` : ''}`);
+    sendResponse({ success: true, count: photoUrls.length });
+  } catch (error) {
+    console.error('Background: Error storing scraped photos:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+/**
+ * Retrieve scraped photos for a given VIN
+ */
+async function handleGetScrapedPhotos(data, sendResponse) {
+  try {
+    const { vin } = data;
+    const existing = await chrome.storage.local.get(['scrapedPhotos']);
+    const scrapedPhotos = existing.scrapedPhotos || {};
+
+    let urls = [];
+    if (vin && scrapedPhotos[vin]) {
+      urls = scrapedPhotos[vin].urls || [];
+    } else if (scrapedPhotos._lastScraped) {
+      // Fallback: offer the last scraped set if VIN doesn't match
+      urls = scrapedPhotos._lastScraped.urls || [];
+    }
+
+    sendResponse({ success: true, urls, vin });
+  } catch (error) {
+    console.error('Background: Error getting scraped photos:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+/**
+ * Fetch all vehicle photos from a dealer website by VIN.
+ * Uses the Dealer.com catcher.esl?vin= redirect to reach the VDP,
+ * then parses the HTML for photo URLs.
+ */
+async function handleFetchDealerPhotos(data, sendResponse) {
+  try {
+    const { vin, dealerUrl } = data;
+    if (!vin || !dealerUrl) {
+      sendResponse({ success: false, error: 'Missing VIN or dealer URL' });
+      return;
+    }
+
+    // Check cache first
+    const cacheKey = `dealerPhotos_${vin}`;
+    const cached = await chrome.storage.local.get([cacheKey]);
+    if (cached[cacheKey] && (Date.now() - cached[cacheKey].timestamp < 3600000)) { // 1hr cache
+      console.log(`Background: Using cached dealer photos for ${vin} (${cached[cacheKey].urls.length} photos)`);
+      sendResponse({ success: true, photoUrls: cached[cacheKey].urls });
+      return;
+    }
+
+    let photoUrls = [];
+
+    // === Strategy 1: Dealer.com media API (most reliable) ===
+    try {
+      const apiUrl = `${dealerUrl}/apis/widget/INVENTORY_LISTING_DEFAULT_AUTO_USED:inventory-702/vehicle/media/${vin}`;
+      console.log(`Background: Trying Dealer.com media API for ${vin}`);
+      const apiResp = await fetch(apiUrl, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+      if (apiResp.ok) {
+        const apiData = await apiResp.json();
+        const images = apiData?.images || apiData?.media?.images || [];
+        for (const img of images) {
+          const url = img?.uri || img?.url || img?.src || img?.href;
+          if (url && url.startsWith('http') && isVehiclePhoto(url)) {
+            photoUrls.push(normalizePhotoSize(url));
+          }
+        }
+        console.log(`Background: API returned ${photoUrls.length} photos`);
+      }
+    } catch (apiErr) {
+      console.log(`Background: Media API failed, trying other strategies...`);
+    }
+
+    // Try NEW vehicle API too if used inventory didn't work
+    if (photoUrls.length < 5) {
+      try {
+        const apiUrl2 = `${dealerUrl}/apis/widget/INVENTORY_LISTING_DEFAULT_AUTO_NEW:inventory-702/vehicle/media/${vin}`;
+        const apiResp2 = await fetch(apiUrl2, {
+          headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+        if (apiResp2.ok) {
+          const apiData2 = await apiResp2.json();
+          const images2 = apiData2?.images || apiData2?.media?.images || [];
+          for (const img of images2) {
+            const url = img?.uri || img?.url || img?.src || img?.href;
+            if (url && url.startsWith('http') && isVehiclePhoto(url)) {
+              photoUrls.push(normalizePhotoSize(url));
+            }
+          }
+          console.log(`Background: New inventory API returned ${photoUrls.length} total photos`);
+        }
+      } catch (e) { /* skip */ }
+    }
+
+    // === Strategy 2: VDP page HTML scraping (fallback) ===
+    if (photoUrls.length < 5) {
+      try {
+        const catcherUrl = `${dealerUrl}/catcher.esl?vin=${vin}`;
+        console.log(`Background: Trying VDP HTML scrape for ${vin}: ${catcherUrl}`);
+        const response = await fetch(catcherUrl, {
+          redirect: 'follow',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          }
+        });
+        if (response.ok) {
+          const html = await response.text();
+          if (!html.includes('Access Denied')) {
+            const htmlPhotos = extractPhotosFromHTML(html, vin);
+            // Merge with any API results
+            for (const url of htmlPhotos) {
+              if (!photoUrls.includes(url)) photoUrls.push(url);
+            }
+            console.log(`Background: HTML scrape found ${htmlPhotos.length} photos, ${photoUrls.length} total`);
+          } else {
+            console.log('Background: VDP returned Access Denied, skipping HTML scrape');
+          }
+        }
+      } catch (htmlErr) {
+        console.log('Background: HTML scrape failed:', htmlErr.message);
+      }
+    }
+
+    // === Strategy 3: Inventory search page (last resort) ===
+    if (photoUrls.length < 5) {
+      try {
+        // Try both used and new inventory
+        for (const invType of ['used-inventory', 'new-inventory']) {
+          const searchUrl = `${dealerUrl}/${invType}/index.htm?search=${vin}`;
+          console.log(`Background: Trying ${invType} search for ${vin}`);
+          const searchResp = await fetch(searchUrl, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'text/html'
+            }
+          });
+          if (searchResp.ok) {
+            const searchHtml = await searchResp.text();
+            if (!searchHtml.includes('Access Denied')) {
+              const searchPhotos = extractPhotosFromHTML(searchHtml, vin);
+              for (const url of searchPhotos) {
+                if (!photoUrls.includes(url)) photoUrls.push(url);
+              }
+              if (photoUrls.length >= 5) break;
+            }
+          }
+        }
+      } catch (searchErr) {
+        console.log('Background: Inventory search failed:', searchErr.message);
+      }
+    }
+
+    // Deduplicate
+    photoUrls = [...new Set(photoUrls)];
+    
+    console.log(`Background: Total ${photoUrls.length} photos for VIN ${vin}`);
+
+    // Cache results
+    if (photoUrls.length > 0) {
+      await chrome.storage.local.set({ [cacheKey]: { urls: photoUrls, timestamp: Date.now() } });
+    }
+
+    sendResponse({ success: true, photoUrls });
+  } catch (error) {
+    console.error('Background: Error fetching dealer photos:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+/**
+ * Extract vehicle photo URLs from dealer website HTML.
+ * Supports multiple patterns used by Dealer.com and other platforms.
+ */
+function extractPhotosFromHTML(html, vin) {
+  const photoUrls = new Set();
+
+  // ============================================================
+  // Pattern 1: DDC.WS.state media objects (Dealer.com standard)
+  // Matches: DDC.WS.state['ws-vehicle-media']['mediaX'] = {"media":{"images":[...]}}
+  // ============================================================
+  const ddcStatePattern = /DDC\.WS\.state\[['"]ws-vehicle-media['"]\]\[['"][^'"]+['"]\]\s*=\s*(\{[\s\S]*?\});/g;
+  let match;
+  while ((match = ddcStatePattern.exec(html)) !== null) {
+    try {
+      const stateObj = JSON.parse(match[1]);
+      const images = stateObj?.media?.images || stateObj?.images || [];
+      for (const img of images) {
+        const url = img?.uri || img?.url || img?.src;
+        if (url && url.startsWith('http')) {
+          photoUrls.add(url);
+        }
+      }
+    } catch (e) {
+      // JSON parse failed — try regex extraction within this block
+      const urlMatches = match[1].matchAll(/"uri"\s*:\s*"(https?:\/\/[^"]+)"/g);
+      for (const m of urlMatches) {
+        if (isVehiclePhoto(m[1])) photoUrls.add(m[1]);
+      }
+    }
+  }
+
+  // ============================================================
+  // Pattern 2: JSON-LD structured data (common SEO markup)
+  // ============================================================
+  const jsonLdPattern = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  while ((match = jsonLdPattern.exec(html)) !== null) {
+    try {
+      const jsonData = JSON.parse(match[1]);
+      const extractImages = (obj) => {
+        if (!obj) return;
+        if (obj.image) {
+          const imgs = Array.isArray(obj.image) ? obj.image : [obj.image];
+          for (const img of imgs) {
+            const url = typeof img === 'string' ? img : img?.url;
+            if (url && url.startsWith('http') && isVehiclePhoto(url)) photoUrls.add(url);
+          }
+        }
+        if (obj.photo) {
+          const photos = Array.isArray(obj.photo) ? obj.photo : [obj.photo];
+          for (const p of photos) {
+            const url = typeof p === 'string' ? p : p?.url || p?.contentUrl;
+            if (url && url.startsWith('http') && isVehiclePhoto(url)) photoUrls.add(url);
+          }
+        }
+      };
+      if (Array.isArray(jsonData)) jsonData.forEach(extractImages);
+      else extractImages(jsonData);
+    } catch (e) { /* invalid JSON-LD, skip */ }
+  }
+
+  // ============================================================
+  // Pattern 3: Direct image URL extraction (broad catch-all)
+  // Matches common dealer photo CDN domains
+  // ============================================================
+  const knownCdnDomains = [
+    'pictures.dealer.com',
+    'assets.cai-media-management.com',
+    'vehicle-photos-published.vauto.com',
+    'cdn.dealermade.com',
+    'homenetiol.com',
+    'spincar.com'
+  ];
+  
+  for (const domain of knownCdnDomains) {
+    const domainRegex = new RegExp(`https?://[^"'\\s]*${domain.replace(/\./g, '\\.')}[^"'\\s]*\\.(?:jpg|jpeg|png|webp)`, 'gi');
+    while ((match = domainRegex.exec(html)) !== null) {
+      const url = match[0].replace(/&amp;/g, '&');
+      if (isVehiclePhoto(url)) {
+        // Upgrade to larger size where possible
+        photoUrls.add(normalizePhotoSize(url));
+      }
+    }
+  }
+
+  // ============================================================
+  // Pattern 4: Generic image gallery data attributes
+  // data-src, data-image, data-photo-url, etc.
+  // ============================================================
+  const dataAttrPattern = /data-(?:src|image|photo-url|original|zoom-image|large-image)\s*=\s*["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/gi;
+  while ((match = dataAttrPattern.exec(html)) !== null) {
+    if (isVehiclePhoto(match[1])) {
+      photoUrls.add(normalizePhotoSize(match[1]));
+    }
+  }
+
+  return Array.from(photoUrls);
+}
+
+/** Check if URL looks like a vehicle photo (not a logo/icon/tracker) */
+function isVehiclePhoto(url) {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  const excludes = ['logo', 'icon', 'favicon', 'sprite', 'avatar', 'placeholder',
+    'loading', 'spinner', 'google', 'facebook', 'analytics', '1x1', 'pixel', 'tracking',
+    'beacon', 'badge', 'toolbar', 'button'];
+  return !excludes.some(e => lower.includes(e));
+}
+
+/** Normalize photo URL to the largest available size */
+function normalizePhotoSize(url) {
+  // Dealer.com: upgrade resolution (e.g., /0480/ → /1280/)
+  let normalized = url.replace(/\/\d{3,4}\//, '/1280/');
+  // cai-media-management: upgrade resize
+  normalized = normalized.replace(/\/resize\/\d+x\d+\//, '/resize/1024x1024/');
+  return normalized;
 }
 
 /**

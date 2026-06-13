@@ -245,47 +245,7 @@ async function fillMarketplaceForm() {
   } catch (error) {
     console.warn('Failed to fill additional vehicle fields:', error);
   }
-  
-  // Fill Mileage AGAIN at the end, after all other fields are filled
-  // This ensures it persists even if it was cleared by form updates
-  if (vehicleData.mileage) {
-    console.log('Re-filling Mileage field at the end to ensure persistence...');
-    for (let finalAttempt = 0; finalAttempt < 2; finalAttempt++) { // Reduced from 3 to 2 attempts
-      await smartSleep(500, () => {
-        // Early exit if mileage field is already filled correctly
-        const mileageField = findMileageField();
-        if (mileageField) {
-          let expectedMileage = parseInt(vehicleData.mileage) || 0;
-          if (expectedMileage < 300) expectedMileage = 301;
-          return mileageField.value === expectedMileage.toString() || mileageField.value === expectedMileage;
-        }
-        return false;
-      });
-      
-      const filled = await fillMileageField();
-      if (filled) {
-        // Smart wait and verify
-        const verified = await waitForCondition(() => {
-          const mileageField = findMileageField();
-          if (!mileageField) return false;
-          let expectedMileage = parseInt(vehicleData.mileage) || 0;
-          if (expectedMileage < 300) expectedMileage = 301;
-          return mileageField.value === expectedMileage.toString() || mileageField.value === expectedMileage;
-        }, { timeout: 2000, interval: 100 }); // Check every 100ms, max 2s
-        
-        if (verified) {
-          console.log(`✓ Mileage field persisted after final fill (attempt ${finalAttempt + 1})`);
-          break;
-        } else {
-          const mileageField = findMileageField();
-          const currentValue = mileageField ? mileageField.value : 'field not found';
-          let expectedMileage = parseInt(vehicleData.mileage) || 0;
-          if (expectedMileage < 300) expectedMileage = 301;
-          console.warn(`Mileage still not persisting (final attempt ${finalAttempt + 1}). Expected: ${expectedMileage}, Got: ${currentValue}`);
-        }
-      }
-    }
-  }
+
 
   // Fill title
   sendProgressUpdate(55, 'Filling Title...');
@@ -1562,34 +1522,31 @@ async function fillModelFieldAfterVehicleType() {
 async function fillMileageFieldAfterVehicleType() {
   if (!vehicleData.mileage) return false;
   
-  // Wait a bit longer after Vehicle Type to ensure form is fully ready
-  await sleep(1000);
+  // Wait for form to be fully ready
+  await sleep(300);
   
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) {
-      await sleep(800);
+      await sleep(300);
     }
     const filled = await fillMileageField();
     if (filled) {
-      // Wait longer and verify it persists - this is critical
-      await sleep(1500);
+      // Wait and verify it persists
+      await sleep(300);
       const mileageField = await findMileageField();
-      // Apply minimum mileage rule for verification
       let expectedMileage = parseInt(vehicleData.mileage) || 0;
-      if (expectedMileage < 300) {
-        expectedMileage = 301;
-      }
-      if (mileageField && (mileageField.value === expectedMileage.toString() || mileageField.value === expectedMileage)) {
+      if (expectedMileage < 300) expectedMileage = 301;
+      const currentValue = mileageField ? getFieldValue(mileageField) : null;
+      if (currentValue && String(currentValue).replace(/[^0-9]/g, '') === expectedMileage.toString()) {
         console.log(`✓ Mileage field filled and persisted successfully (attempt ${attempt + 1})`);
         return true;
       } else {
-        const currentValue = mileageField ? mileageField.value : 'field not found';
         console.warn(`Mileage field value cleared after fill (attempt ${attempt + 1}). Expected: ${expectedMileage}, Got: ${currentValue}. Retrying...`);
       }
     }
   }
   
-  console.warn('Mileage field not found when trying to fill after Vehicle Type (tried 8 times)');
+  console.warn('Mileage field not found when trying to fill after Vehicle Type (tried 2 times)');
   return false;
 }
 
@@ -1628,7 +1585,11 @@ async function findMileageField() {
     return text === 'mileage' || text === 'odometer';
   }) || labels[0];
   
-  console.log('Found Mileage label:', label.textContent.trim());
+  // Only log on first call (avoid spam from polling loops)
+  if (!findMileageField._logged) {
+    console.log('Found Mileage label:', label.textContent.trim());
+    findMileageField._logged = true;
+  }
   
   let field = null;
   let current = label;
@@ -1769,7 +1730,10 @@ async function findMileageField() {
       console.warn('Found field appears to be Location field, rejecting');
       return null;
     }
-    console.log('Found Mileage field, aria-label:', fieldAriaLabel, 'placeholder:', fieldPlaceholder);
+    if (!findMileageField._fieldLogged) {
+      console.log('Found Mileage field, aria-label:', fieldAriaLabel, 'placeholder:', fieldPlaceholder);
+      findMileageField._fieldLogged = true;
+    }
   }
   
   return field;
@@ -3417,8 +3381,8 @@ function findLocationSuggestion(city) {
 }
 
 /**
- * Fill photos (if we have photo data)
- * Downloads image from URL if needed and uploads to Facebook Marketplace
+ * Fill photos (supports multiple photos per vehicle)
+ * Uses multiple upload strategies since Facebook blocks simple programmatic file sets
  */
 async function fillPhotos() {
   try {
@@ -3429,140 +3393,328 @@ async function fillPhotos() {
       return false;
     }
 
-    const { imageUrl, vin } = photoData.selectedPhotoData;
+    const { imageUrl, imageUrls, vin } = photoData.selectedPhotoData;
     
-    if (!imageUrl) {
-      console.log('No image URL found for photo upload');
+    // Build the list of URLs to upload
+    const urlsToUpload = imageUrls && imageUrls.length > 0 
+      ? imageUrls 
+      : (imageUrl ? [imageUrl] : []);
+    
+    if (urlsToUpload.length === 0) {
+      console.log('No image URLs found for photo upload');
       return false;
     }
 
-    console.log('Attempting to upload photo:', imageUrl);
-
-    // Find the photo upload area - Facebook Marketplace uses various selectors
-    const photoSelectors = [
-      'input[type="file"][accept*="image"]',
-      'input[type="file"]',
-      'div[aria-label*="Photo"] input[type="file"]',
-      'div[aria-label*="photo"] input[type="file"]',
-      'div[role="button"][aria-label*="Photo"]',
-      'div[role="button"][aria-label*="photo"]',
-      'button[aria-label*="Add photos"]',
-      'div[aria-label*="Add photos"]'
-    ];
-
-    let fileInput = null;
-    let uploadButton = null;
-
-    // First, try to find a file input directly
-    for (const selector of photoSelectors) {
-      const element = document.querySelector(selector);
-      if (element && element.tagName === 'INPUT' && element.type === 'file') {
-        fileInput = element;
-        console.log('Found file input:', selector);
-        break;
-      }
+    // Cap at 20 (Facebook Marketplace maximum)
+    const MAX_PHOTOS = 20;
+    if (urlsToUpload.length > MAX_PHOTOS) {
+      console.log(`Capping photos from ${urlsToUpload.length} to ${MAX_PHOTOS} (Facebook Marketplace limit)`);
+      urlsToUpload.length = MAX_PHOTOS;
     }
 
-    // If no file input found, look for upload button and try to find associated input
-    if (!fileInput) {
-      for (const selector of photoSelectors) {
-        const element = document.querySelector(selector);
-        if (element && (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button' || element.tagName === 'DIV')) {
-          // Look for file input nearby or in parent
-          const nearbyInput = element.closest('div')?.querySelector('input[type="file"]') ||
-                            element.parentElement?.querySelector('input[type="file"]') ||
-                            element.querySelector('input[type="file"]');
-          
-          if (nearbyInput) {
-            fileInput = nearbyInput;
-            uploadButton = element;
-            console.log('Found file input via button:', selector);
-            break;
+    console.log(`Attempting to upload ${urlsToUpload.length} photo(s) for VIN: ${vin}`);
+
+    // Download ALL images in parallel via background script (bypasses CORS)
+    console.log(`Downloading ${urlsToUpload.length} images via background script...`);
+    
+    const downloadPromises = urlsToUpload.map(async (url, index) => {
+      try {
+        const imageResponse = await chrome.runtime.sendMessage({
+          action: 'fetchImage',
+          data: { imageUrl: url }
+        });
+
+        if (!imageResponse || !imageResponse.success) {
+          console.warn(`Failed to fetch image ${index + 1}/${urlsToUpload.length}: ${imageResponse?.error || 'No response'}`);
+          return null;
+        }
+
+        const { dataUrl, mimeType, size } = imageResponse;
+        console.log(`Image ${index + 1}/${urlsToUpload.length} fetched: ${size} bytes, ${mimeType}`);
+
+        // Convert data URL to File
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        const fileName = url.split('/').pop()?.split('?')[0] || `vehicle_${vin || 'photo'}_${index}.jpg`;
+        return new File([blob], fileName, { type: mimeType || 'image/jpeg' });
+      } catch (error) {
+        console.warn(`Error fetching image ${index + 1}: ${error.message}`);
+        return null;
+      }
+    });
+
+    const files = (await Promise.all(downloadPromises)).filter(f => f !== null);
+
+    if (files.length === 0) {
+      console.error('No images were successfully downloaded');
+      return false;
+    }
+
+    console.log(`Successfully downloaded ${files.length}/${urlsToUpload.length} images.`);
+
+    // ====================================================================
+    // STRATEGY 1: Drag-and-Drop on the photo upload zone
+    // ====================================================================
+    console.log('Strategy 1: Drag-and-Drop upload...');
+    let dropZone = findPhotoDropZone();
+
+    if (dropZone) {
+      try {
+        const dt = new DataTransfer();
+        files.forEach(file => dt.items.add(file));
+        
+        dropZone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+        await sleep(100);
+        dropZone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+        await sleep(100);
+        dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+        
+        console.log('Drag-and-drop events dispatched, waiting...');
+        await sleep(3000);
+        
+        if (detectUploadedPhotos()) {
+          console.log('✓ Strategy 1 (Drag-and-Drop) succeeded!');
+          return true;
+        }
+        console.log('Strategy 1: no visible results, trying next...');
+      } catch (e) {
+        console.warn('Strategy 1 error:', e.message);
+      }
+    } else {
+      console.log('No drop zone found, skipping Strategy 1');
+    }
+
+    // ====================================================================
+    // STRATEGY 2: React fiber onChange invocation
+    // ====================================================================
+    console.log('Strategy 2: React fiber onChange...');
+    let fileInput = findFileInput();
+    
+    if (fileInput) {
+      try {
+        const dt = new DataTransfer();
+        files.forEach(file => dt.items.add(file));
+        fileInput.files = dt.files;
+        
+        const propsKey = Object.keys(fileInput).find(k => k.startsWith('__reactProps'));
+        const fiberKey = Object.keys(fileInput).find(k => 
+          k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
+        );
+        
+        let called = false;
+        
+        if (propsKey) {
+          const props = fileInput[propsKey];
+          if (props && props.onChange) {
+            console.log('Calling React onChange via __reactProps...');
+            props.onChange({ target: fileInput, currentTarget: fileInput, type: 'change' });
+            called = true;
           }
         }
+        
+        if (!called && fiberKey) {
+          let fiber = fileInput[fiberKey];
+          let depth = 0;
+          while (fiber && depth < 20) {
+            const props = fiber.memoizedProps || fiber.pendingProps;
+            if (props && props.onChange) {
+              console.log(`Calling React onChange at fiber depth ${depth}...`);
+              props.onChange({ target: fileInput, currentTarget: fileInput, type: 'change' });
+              called = true;
+              break;
+            }
+            fiber = fiber.return;
+            depth++;
+          }
+        }
+        
+        if (called) {
+          await sleep(2000);
+          if (detectUploadedPhotos()) {
+            console.log('✓ Strategy 2 (React fiber) succeeded!');
+            return true;
+          }
+        }
+        
+        fileInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        await sleep(2000);
+        if (detectUploadedPhotos()) {
+          console.log('✓ Strategy 2 (change event) succeeded!');
+          return true;
+        }
+        console.log('Strategy 2: no visible results, trying next...');
+      } catch (e) {
+        console.warn('Strategy 2 error:', e.message);
       }
     }
 
-    // If still no file input, try clicking upload button to reveal it
-    if (!fileInput && uploadButton) {
-      console.log('Clicking upload button to reveal file input...');
-      uploadButton.click();
-      await sleep(1000);
-      
-      // Try to find file input again
-      fileInput = document.querySelector('input[type="file"][accept*="image"]') ||
-                  document.querySelector('input[type="file"]');
-    }
-
-    if (!fileInput) {
-      console.warn('Photo upload input not found. User may need to upload photos manually.');
-      return false;
-    }
-
-    // Download image from URL via background script (bypasses CORS)
-    console.log('Requesting image from background script (bypasses CORS):', imageUrl);
+    // ====================================================================
+    // STRATEGY 3: Clipboard paste on the upload area
+    // ====================================================================
+    console.log('Strategy 3: Clipboard paste...');
+    const pasteTarget = dropZone || fileInput?.closest('div') || document.querySelector('[role="main"]');
     
-    let imageResponse;
-    try {
-      imageResponse = await chrome.runtime.sendMessage({
-        action: 'fetchImage',
-        data: { imageUrl }
-      });
-    } catch (messageError) {
-      console.error('Error sending message to background script:', messageError);
-      throw new Error('Failed to communicate with background script: ' + messageError.message);
+    if (pasteTarget) {
+      try {
+        const dt = new DataTransfer();
+        files.forEach(file => dt.items.add(file));
+        
+        const pasteEvent = new ClipboardEvent('paste', {
+          bubbles: true,
+          cancelable: true,
+          clipboardData: dt
+        });
+        pasteTarget.dispatchEvent(pasteEvent);
+        
+        console.log('Paste event dispatched, waiting...');
+        await sleep(3000);
+        
+        if (detectUploadedPhotos()) {
+          console.log('✓ Strategy 3 (Clipboard paste) succeeded!');
+          return true;
+        }
+        console.log('Strategy 3: no visible results, trying next...');
+      } catch (e) {
+        console.warn('Strategy 3 error:', e.message);
+      }
     }
 
-    if (!imageResponse) {
-      throw new Error('No response from background script');
+    // ====================================================================
+    // STRATEGY 4: Override files property + comprehensive events
+    // ====================================================================
+    console.log('Strategy 4: Property override + events...');
+    if (!fileInput) fileInput = findFileInput();
+    
+    if (fileInput) {
+      try {
+        const dt = new DataTransfer();
+        files.forEach(file => dt.items.add(file));
+        
+        const origDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+        Object.defineProperty(fileInput, 'files', {
+          get: () => dt.files,
+          configurable: true
+        });
+        
+        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+        fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+        
+        await sleep(2000);
+        
+        if (origDescriptor) {
+          Object.defineProperty(fileInput, 'files', origDescriptor);
+        } else {
+          delete fileInput.files;
+        }
+        
+        if (detectUploadedPhotos()) {
+          console.log('✓ Strategy 4 (property override) succeeded!');
+          return true;
+        }
+        console.log('Strategy 4: no visible results.');
+      } catch (e) {
+        console.warn('Strategy 4 error:', e.message);
+      }
     }
 
-    if (!imageResponse.success) {
-      console.error('Background script error:', imageResponse.error);
-      throw new Error(imageResponse.error || 'Failed to fetch image from background script');
-    }
-
-    const { dataUrl, mimeType, size } = imageResponse;
-    console.log('Image fetched successfully, size:', size, 'bytes, type:', mimeType);
-
-    // Convert data URL to blob, then to File
-    const response = await fetch(dataUrl);
-    const blob = await response.blob();
-    const fileName = imageUrl.split('/').pop() || `vehicle_${vin || 'photo'}.jpg`;
-    const file = new File([blob], fileName, { type: mimeType || 'image/jpeg' });
-
-    console.log('Image converted to File object:', fileName, file.size, 'bytes');
-
-    // Create a DataTransfer object to set files
-    const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(file);
-
-    // Set files on input
-    fileInput.files = dataTransfer.files;
-
-    // Trigger events to notify Facebook's React components
-    const events = ['change', 'input'];
-    for (const eventType of events) {
-      const event = new Event(eventType, { bubbles: true, cancelable: true });
-      fileInput.dispatchEvent(event);
-    }
-
-    // Also try setting value directly (some browsers)
-    if (fileInput.value === '') {
-      // Try to trigger click to open file dialog, then cancel and set programmatically
-      // This is a workaround for browsers that don't allow direct file setting
-      console.log('File set on input. Waiting for upload to process...');
-      await sleep(2000);
-    }
-
-    console.log('✓ Photo upload triggered');
-    return true;
+    console.warn('⚠ All photo upload strategies attempted. Photos may need manual upload.');
+    console.log('TIP: Open DevTools Console and run this to download photos for manual upload:');
+    files.forEach((f, i) => {
+      const blobUrl = URL.createObjectURL(f);
+      console.log(`  Photo ${i + 1}: ${f.name} (${f.size} bytes) — ${blobUrl}`);
+    });
+    
+    return false;
 
   } catch (error) {
-    console.error('Error uploading photo:', error);
-    console.warn('Photo upload failed. User may need to upload photos manually.');
+    console.error('Error uploading photos:', error);
     return false;
   }
+}
+
+/**
+ * Find the photo upload drop zone on Facebook Marketplace
+ */
+function findPhotoDropZone() {
+  const dropZoneSelectors = [
+    'div[aria-label*="photo" i]',
+    'div[aria-label*="Photo" i]',
+    'div[aria-label*="Add photo" i]',
+    'div[aria-label*="Add Photo" i]',
+    'div[aria-label*="Upload" i]',
+    'div[aria-label*="Drag" i]',
+    'div[role="button"][aria-label*="photo" i]',
+    'div[role="button"][aria-label*="Photo" i]',
+  ];
+  
+  for (const selector of dropZoneSelectors) {
+    const el = document.querySelector(selector);
+    if (el && el.offsetParent !== null) return el;
+  }
+  
+  const allDivs = document.querySelectorAll('div[role="button"], div[tabindex]');
+  for (const div of allDivs) {
+    const text = (div.textContent || '').toLowerCase();
+    if ((text.includes('add photo') || text.includes('drag') || text.includes('upload photo')) && 
+        div.offsetParent !== null) {
+      return div;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Find the file input element for photo uploads
+ */
+function findFileInput() {
+  const selectors = [
+    'input[type="file"][accept*="image"]',
+    'input[type="file"][accept*="video"]',
+    'input[type="file"][multiple]',
+    'input[type="file"]'
+  ];
+  
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (el) return el;
+  }
+  
+  return null;
+}
+
+/**
+ * Detect if photos were successfully uploaded
+ */
+function detectUploadedPhotos() {
+  const indicators = [
+    'img[src*="blob:"]',
+    'img[src*="scontent"]',
+    'div[aria-label*="photo" i] img',
+    'div[aria-label*="Photo" i] img',
+    '[data-testid*="photo"] img',
+    'div[aria-label*="Edit"] img',
+    'div[aria-label*="edit"] img',
+    'div[aria-label*="uploaded" i]',
+    'div[aria-label*="Added" i]',
+  ];
+  
+  const formArea = document.querySelector('[role="main"]') || document.body;
+  
+  for (const selector of indicators) {
+    try {
+      const found = document.querySelectorAll(selector);
+      const inForm = Array.from(found).filter(el => formArea.contains(el));
+      if (inForm.length > 0) {
+        console.log(`detectUploadedPhotos: Found ${inForm.length} via "${selector}"`);
+        return true;
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+  
+  return false;
 }
 
 /**
