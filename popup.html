@@ -7,231 +7,145 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <div class="header-content">
-        <img src="icons/beck-logo.png" alt="Beck Auto-Post" class="header-logo" id="headerLogo">
-        <h1>Beck Auto-Post</h1>
-      </div>
-      <div class="header-actions">
-        <button id="openMarketplaceBtn" class="header-action-btn" title="Open Facebook Marketplace">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-            <polyline points="15 3 21 3 21 9"></polyline>
-            <line x1="10" y1="14" x2="21" y2="3"></line>
-          </svg>
-          <span>Marketplace</span>
-        </button>
-        <button id="settingsBtn" class="icon-btn" title="Settings">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"></path>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </button>
-      </div>
-    </header>
+<div class="app">
 
-    <!-- Settings Panel (hidden by default) -->
-    <div id="settingsPanel" class="panel hidden">
-      <h2>Settings</h2>
-      
-      <!-- CSV Data Source -->
-      <div class="form-group">
-        <label>CSV Data Source:</label>
-        <div style="margin-bottom: 12px;">
-          <label style="display: flex; align-items: center; margin-bottom: 8px; cursor: pointer;">
-            <input type="radio" name="csvSource" value="url" id="csvSourceUrl" style="margin-right: 8px; cursor: pointer;">
-            <span>Auto-sync from URL (Recommended)</span>
-          </label>
-          <label style="display: flex; align-items: center; cursor: pointer;">
-            <input type="radio" name="csvSource" value="file" id="csvSourceFile" checked style="margin-right: 8px; cursor: pointer;">
-            <span>Upload local file</span>
-          </label>
-        </div>
-      </div>
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand"><span class="brand__mark">beck</span><span class="brand__tag">Auto-Post</span></div>
+    <span class="store"><span class="live"></span><span id="storeName">—</span></span>
+    <button id="btnSettings" class="icon-btn" aria-label="Settings" title="Settings"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button>
+  </header>
 
-      <!-- CSV URL Setup -->
-      <div id="csvUrlGroup" class="form-group" style="display: none;">
-        <label for="csvUrlInput">CSV URL:</label>
-        <input type="url" id="csvUrlInput" placeholder="https://your-proxy.com/csv" style="width: 100%; padding: 8px; margin-top: 4px; margin-bottom: 8px; display: block !important; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box;">
-        <small style="display: block; margin-top: 4px; color: #666;">Enter the URL of your CSV proxy service (e.g., SFTP proxy endpoint).</small>
-        
-        <div style="margin-top: 12px;">
-          <label for="csvApiKeyInput">API Key (Optional):</label>
-          <input type="password" id="csvApiKeyInput" placeholder="Enter API key if required" style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; display: block !important;">
-          <small>If your proxy service requires an API key, enter it here.</small>
-        </div>
-        
-        <div style="margin-top: 12px;">
-          <label style="display: flex; align-items: center; margin-bottom: 8px;">
-            <input type="checkbox" id="autoRefreshEnabled" checked style="margin-right: 8px;">
-            <span>Enable auto-refresh</span>
-          </label>
-        </div>
-        
-        <div id="autoRefreshIntervalGroup" style="margin-top: 8px; margin-left: 24px;">
-          <label for="autoRefreshInterval">Refresh interval (minutes):</label>
-          <input type="number" id="autoRefreshInterval" min="1" max="1440" value="15" style="width: 80px; margin-left: 8px;">
-        </div>
-        
-        <div id="csvLastUpdate" style="margin-top: 8px; font-size: 12px; color: #666;">
-          <span>Last update: <span id="csvLastUpdateTime">Never</span></span>
-        </div>
-      </div>
-
-      <!-- CSV File Upload (fallback) -->
-      <div id="csvFileGroup" class="form-group">
-        <label for="csvFileInput">Vehicle CSV File:</label>
-        <input type="file" id="csvFileInput" accept=".csv" class="file-input">
-        <label for="csvFileInput" class="file-label">
-          <span class="file-icon">📄</span>
-          <span class="file-text" id="csvFileName">Choose CSV File</span>
-        </label>
-        <small>Upload your vehicle CSV file. Data will auto-load when extension opens.</small>
-        <div id="csvStatus" class="status"></div>
-      </div>
-
-      <!-- Dealer Website URLs (for photo lookups) -->
-      <div class="form-group">
-        <label for="dealerWebsiteUrls">Dealer Website URLs:</label>
-        <textarea id="dealerWebsiteUrls" rows="3" placeholder="https://www.beckchryslerdodgejeep.com&#10;https://www.becknissan.com" style="width: 100%; padding: 8px; margin-top: 4px; margin-bottom: 4px; display: block !important; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; box-sizing: border-box; font-family: inherit; resize: vertical;"></textarea>
-        <small style="display: block; color: #666;">Enter one dealer website URL per line. Photos will be auto-fetched for each vehicle by VIN.</small>
-      </div>
-
-      <!-- AI Service Settings -->
-      <div class="form-group">
-        <label for="aiService">AI Service:</label>
-        <select id="aiService">
-          <option value="openai">OpenAI (GPT-4)</option>
-          <option value="anthropic">Anthropic (Claude)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="apiKey">API Key:</label>
-        <input type="password" id="apiKey" placeholder="Enter your API key">
-        <small>Your API key is stored locally and never shared</small>
-      </div>
-      <button id="saveSettingsBtn" class="btn btn-primary">Save Settings</button>
-      <button id="closeSettingsBtn" class="btn btn-secondary">Close</button>
+  <!-- Step rail -->
+  <div class="steprail">
+    <div class="steprail__segs" id="stepSegs" role="progressbar" aria-valuemin="1" aria-valuemax="3" aria-valuenow="1">
+      <span class="seg is-on" data-step="1"></span>
+      <span class="seg" data-step="2"></span>
+      <span class="seg" data-step="3"></span>
     </div>
-
-    <!-- Main Panel -->
-    <div id="mainPanel" class="panel">
-      <!-- Refresh Button - Top Right -->
-      <button id="refreshBtn" class="refresh-btn" title="Refresh">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-        </svg>
-      </button>
-      
-      <!-- Photo Selection Section - Main View -->
-      <div id="photoSection" class="section">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <h2 style="margin: 0;">Select Vehicle</h2>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <button id="backToGalleryBtn" class="back-btn hidden" title="Back to all vehicles" style="padding: 6px 12px; background: #1877f2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; display: none;">
-              ← Back
-            </button>
-            <div id="csvSyncStatus" style="font-size: 11px; color: #666; display: none;">
-              <span id="csvSyncStatusText"></span>
-            </div>
-          </div>
-        </div>
-        <input type="file" id="photoFileInput" accept="image/*" multiple class="file-input hidden">
-        
-        <div id="photoGallery" class="photo-gallery"></div>
-        <div id="photoStatus" class="status"></div>
-        
-        <!-- Empty State -->
-        <div id="emptyState" class="empty-state hidden">
-        </div>
-      </div>
-
-      <!-- Vehicle Info Section -->
-      <div id="vehicleSection" class="section hidden">
-        <h2>Vehicle Information</h2>
-        <div id="vehicleInfo" class="vehicle-info">
-          <div class="info-row">
-            <span class="info-label">VIN:</span>
-            <span id="vehicleVin" class="info-value"></span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Year:</span>
-            <span id="vehicleYear" class="info-value"></span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Make:</span>
-            <span id="vehicleMake" class="info-value"></span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Model:</span>
-            <span id="vehicleModel" class="info-value"></span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Trim:</span>
-            <span id="vehicleTrim" class="info-value"></span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Price:</span>
-            <input type="text" id="vehiclePrice" class="info-input" placeholder="$0">
-          </div>
-          <div class="info-row">
-            <span class="info-label">Mileage:</span>
-            <span id="vehicleMileage" class="info-value"></span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Color:</span>
-            <span id="vehicleColor" class="info-value"></span>
-          </div>
-        </div>
-      </div>
-
-      <!-- AI Description Section -->
-      <div id="aiSection" class="section hidden">
-        <h2>Generate Description</h2>
-        <div class="form-group">
-          <label for="aiPrompt">AI Prompt:</label>
-          <textarea 
-            id="aiPrompt" 
-            rows="3" 
-            placeholder="Enter your prompt for AI description generation (e.g., 'Create an engaging description highlighting fuel economy and safety features'). Note: Descriptions will automatically exclude dealership names/phone numbers and include Facebook DM instructions."
-          ></textarea>
-        </div>
-        <button id="generateBtn" class="btn btn-primary">
-          <span id="generateBtnText">Generate Description</span>
-          <span id="generateBtnSpinner" class="spinner hidden"></span>
-        </button>
-        <div id="descriptionResult" class="description-result hidden">
-          <label>Generated Description:</label>
-          <textarea id="generatedDescription" rows="8" readonly></textarea>
-          <div class="button-group">
-            <button id="copyDescriptionBtn" class="btn btn-secondary">Copy</button>
-            <button id="regenerateBtn" class="btn btn-secondary">Regenerate</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Action Section -->
-      <div id="actionSection" class="section hidden">
-        <h2>Post to Marketplace</h2>
-        <p class="instruction">Navigate to Facebook Marketplace and click the button below to auto-fill the form.</p>
-        <button id="fillFormBtn" class="btn btn-primary hidden" style="position: relative; overflow: hidden;">
-          <span class="btn-progress" id="btnProgress"></span>
-          <span class="btn-text" id="btnText">Fill Marketplace Form</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Loading Overlay -->
-    <div id="loadingOverlay" class="loading-overlay hidden">
-      <div class="spinner large"></div>
-      <p id="loadingText">Loading...</p>
+    <div class="steprail__label">
+      <span>Step <span id="stepNum">1</span> of 3 · <b id="stepName">Inventory</b></span>
+      <span class="steprail__count" id="stepCnt"></span>
     </div>
   </div>
 
-  <script src="utils/csvParser.js"></script>
-  <script src="utils/vinMatcher.js"></script>
-  <script src="popup.js"></script>
+  <main class="scroll" id="scroll">
+
+    <!-- Step 1 · Inventory -->
+    <section class="step is-active" id="step-inventory" aria-labelledby="ttl-inv">
+      <div class="step-head">
+        <h1 class="step-title" id="ttl-inv">Inventory</h1>
+        <p class="step-sub ss-live"><span class="live"></span><span id="invStatus">Live feed · auto-updates</span></p>
+      </div>
+      <div class="search">
+        <i class="ti ti-search" aria-hidden="true"></i>
+        <input type="text" id="invSearch" placeholder="Search year, make, model, trim, color, VIN, stock…" aria-label="Search inventory">
+      </div>
+      <div class="fchips" id="invChips"></div>
+      <div class="synced" id="invSynced"></div>
+      <div class="vlist" id="invList" role="listbox" aria-label="Vehicles"></div>
+      <div id="invSkeleton" hidden>
+        <div class="skeleton sk-row"></div><div class="skeleton sk-row"></div><div class="skeleton sk-row"></div><div class="skeleton sk-row"></div><div class="skeleton sk-row"></div>
+      </div>
+      <div class="empty" id="invEmpty" hidden>
+        <div class="empty__ico"><i class="ti ti-search" aria-hidden="true"></i></div>
+        <div class="empty__t" id="invEmptyT">No matches</div>
+        <p class="empty__d" id="invEmptyD">Try a different search or clear the filters.</p>
+      </div>
+    </section>
+
+    <!-- Step 2 · Photos -->
+    <section class="step" id="step-photos" aria-labelledby="ttl-ph">
+      <div class="step-head">
+        <h1 class="step-title" id="ttl-ph">Photos</h1>
+        <p class="step-sub">Pick the photos to upload — Facebook allows up to 20.</p>
+      </div>
+      <div class="banner banner--warn" id="photoWarn" hidden>
+        <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+        <div><b>No photos available for this vehicle.</b> It can't be posted with photos — choose another vehicle.</div>
+      </div>
+      <div class="hero" id="hero">
+        <div class="hero__placeholder" id="heroPlaceholder"><i class="ti ti-photo" aria-hidden="true"></i></div>
+        <img class="hero__img" id="heroImg" alt="" hidden>
+        <span class="slabel" id="heroLabel" style="position:absolute;top:12px;left:12px;font-size:10.5px;font-weight:600;padding:5px 10px;border-radius:20px;background:rgba(7,11,20,.55);color:var(--tx2);border:1px solid var(--line);z-index:3"></span>
+        <button class="hero__toggle exc" id="heroToggle"><i class="ti ti-plus" aria-hidden="true"></i><span id="heroToggleT">Add</span></button>
+        <button class="hero__arrow hero__arrow--l" id="heroPrev" aria-label="Previous photo"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+        <button class="hero__arrow hero__arrow--r" id="heroNext" aria-label="Next photo"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
+      </div>
+      <div class="ptools" id="ptools">
+        <span class="pc"><b id="selCount">0</b> / 20 selected<span class="mx" id="selMax"></span></span>
+        <span class="psp"><button class="tbtn" id="btnSelAll">Select all</button><button class="tbtn" id="btnSelNone">Clear</button></span>
+      </div>
+      <div class="pgrid" id="pgrid"></div>
+      <div class="vehicle-id"><span class="vehicle-id__title" id="phTitle">—</span></div>
+      <p class="vehicle-id__sub" id="phSub">—</p>
+      <div class="vehicle-id"><span class="price tnum" id="phPrice">—</span></div>
+    </section>
+
+    <!-- Step 3 · Description -->
+    <section class="step" id="step-description" aria-labelledby="ttl-desc">
+      <div class="step-head">
+        <h1 class="step-title" id="ttl-desc">Description</h1>
+        <p class="step-sub">Generate an AI listing description, then fill Marketplace.</p>
+      </div>
+      <div class="field">
+        <label class="field__label" for="aiPrompt">What to emphasize</label>
+        <textarea class="textarea" id="aiPrompt" style="min-height:78px">Highlight standout features, condition, and value.</textarea>
+      </div>
+      <button class="btn btn--primary btn--block" id="btnGenerate"><i class="ti ti-sparkles" aria-hidden="true"></i>Generate description</button>
+      <div id="descWrap" hidden style="margin-top:14px">
+        <div class="ai-tag"><i class="ti ti-sparkles" aria-hidden="true"></i><span id="descModelTag">AI description</span></div>
+        <div class="desc-output" id="descOutput" contenteditable="true" role="textbox" aria-label="Generated description" aria-multiline="true"></div>
+        <div class="btn-row">
+          <button class="btn btn--sm" id="btnRegen"><i class="ti ti-refresh" aria-hidden="true"></i>Regenerate</button>
+          <button class="btn btn--sm" id="btnCopy"><i class="ti ti-copy" aria-hidden="true"></i>Copy</button>
+        </div>
+      </div>
+      <div class="banner banner--info" id="fillInfo" style="margin-top:15px">
+        <i class="ti ti-brand-facebook" aria-hidden="true"></i>
+        <div><b>Fill</b> opens the Marketplace listing page automatically and attaches <b id="fillPhotoN">0</b> photos. You review &amp; publish in Facebook.</div>
+      </div>
+      <div class="progress" id="fillProgress" hidden><div class="progress__bar" id="fillBar"></div></div>
+      <div id="fillResult"></div>
+    </section>
+
+  </main>
+
+  <!-- Bottom dock -->
+  <div class="dock" id="dock" hidden>
+    <div class="dock__back">
+      <button class="btn btn--ghost" id="dockBack" aria-label="Back"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+      <button class="btn btn--primary" id="dockNext" style="flex:1"><span id="dockNextLabel">Continue</span></button>
+    </div>
+    <div class="dock__hint" id="dockHint"></div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</div>
+
+<!-- Settings drawer -->
+<div class="backdrop" id="settingsBackdrop"></div>
+<aside class="drawer" id="settingsDrawer" aria-label="Settings" aria-hidden="true">
+  <div class="drawer__head">
+    <span class="drawer__title">Settings</span>
+    <button class="icon-btn" id="btnCloseSettings" aria-label="Close settings"><i class="ti ti-x" aria-hidden="true"></i></button>
+  </div>
+  <div class="drawer__body">
+    <div class="drawer__section">Store</div>
+    <div class="field"><label class="field__label" for="setStore">This device posts for</label><input class="input" id="setStore" placeholder="beck-cdjr"></div>
+    <div class="drawer__section">AI description</div>
+    <div class="field"><label class="field__label" for="setAiService">Service</label>
+      <select class="select" id="setAiService"><option value="openai">OpenAI</option><option value="anthropic">Anthropic (Claude)</option></select></div>
+    <div class="field"><label class="field__label" for="setApiKey">API key</label><input class="input" type="password" id="setApiKey" placeholder="sk-…" autocomplete="off"></div>
+    <div class="drawer__section">Inventory feed</div>
+    <div class="field"><label class="field__label" for="setProxyUrl">Proxy URL</label><input class="input" type="url" id="setProxyUrl" placeholder="https://beck-sftp-proxy-production.up.railway.app"></div>
+    <div class="field"><label class="field__label" for="setStoreKey">Feed API key</label><input class="input" type="password" id="setStoreKey" placeholder="store key" autocomplete="off"></div>
+    <div class="drawer__section">Auto-refresh</div>
+    <div class="field"><label class="field__label" for="setRefresh">Sync every (minutes)</label><input class="input" type="number" id="setRefresh" min="5" max="120" value="15"></div>
+    <button class="btn btn--primary btn--block" id="btnSaveSettings" style="margin-top:16px"><i class="ti ti-check" aria-hidden="true"></i>Save settings</button>
+  </div>
+</aside>
+
+<script src="popup.js"></script>
 </body>
 </html>
-

@@ -30,6 +30,8 @@ const IMAGE_PROXY_ALLOWED_DOMAINS = [
   'vehicle-photos.vauto.com',
   'photos.vauto.com',
   'vauto.com',
+  'assets.cai-media-management.com',
+  'cai-media-management.com',
 ];
 
 // CORS middleware

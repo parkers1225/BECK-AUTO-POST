@@ -14,12 +14,17 @@
   ],
   "host_permissions": [
     "https://www.facebook.com/*",
+    "https://*.facebook.com/*",
+    "https://beck-sftp-proxy-production.up.railway.app/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
-    "http://vehicle-photos-published.vauto.com/*",
+    "https://assets.cai-media-management.com/*",
+    "https://*.cai-media-management.com/*",
     "https://vehicle-photos-published.vauto.com/*",
-    "http://*/*",
-    "https://*/*"
+    "https://*.beckchryslerdodgejeep.com/*",
+    "https://*.becknissan.com/*",
+    "https://*.beckfordlinc.com/*",
+    "https://*.beckchevrolet.com/*"
   ],
   "action": {
     "default_icon": {

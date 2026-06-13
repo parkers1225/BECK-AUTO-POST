@@ -46,8 +46,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Wrap in try-catch to handle any unexpected errors
     (async () => {
       try {
-        await fillMarketplaceForm();
-        sendResponse({ success: true });
+        const fillResult = await fillMarketplaceForm();
+        sendResponse({
+          success: true,
+          photosAttached: (fillResult && fillResult.photosAttached) || 0,
+          fields: (fillResult && fillResult.fields) || null
+        });
       } catch (error) {
         console.error('Error in fillMarketplaceForm:', error);
         sendResponse({ 
@@ -92,6 +96,27 @@ async function loadVehicleData() {
     console.error('Failed to load vehicle data:', error);
   }
   return false;
+}
+
+/**
+ * Honest photo counter: counts the actual uploaded vehicle photo previews in the
+ * listing form. Facebook renders uploaded photos as sizeable blob: <img> previews,
+ * so we count those (ignoring tiny UI blobs and Facebook's own scontent CDN chrome).
+ */
+function countVehiclePhotos() {
+  try {
+    const scope = document.querySelector('[role="main"]') || document.body;
+    const imgs = scope.querySelectorAll('img[src^="blob:"]');
+    let count = 0;
+    imgs.forEach((img) => {
+      const w = img.naturalWidth || img.clientWidth || 0;
+      const h = img.naturalHeight || img.clientHeight || 0;
+      if (w >= 80 && h >= 80) count++;
+    });
+    return count;
+  } catch (e) {
+    return 0;
+  }
 }
 
 /**
@@ -337,6 +362,11 @@ async function fillMarketplaceForm() {
     console.warn('%c⚠ Photo upload error:', 'color: #e74c3c; font-weight: bold;', error.message || error);
   }
 
+  // Honest photo verification: count the actual uploaded photo previews in the form
+  let photosAttached = 0;
+  try { await new Promise(r => setTimeout(r, 800)); photosAttached = countVehiclePhotos(); } catch (e) {}
+  results.photos = photosAttached > 0;
+
   const successCount = Object.values(results).filter(Boolean).length;
   const totalFields = Object.keys(results).length;
   
@@ -375,6 +405,8 @@ async function fillMarketplaceForm() {
       'background: #27ae60; color: white; padding: 4px 8px; border-radius: 3px; font-weight: bold;'
     );
   }
+
+  return { fields: results, photosAttached };
 }
 
 /**
