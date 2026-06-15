@@ -99,6 +99,20 @@ async function loadVehicleData() {
 }
 
 /**
+ * Set an <input>/<textarea> value the React way, using the prototype's native
+ * value setter so the framework's value tracker registers the change instead of
+ * silently reverting a plain `.value =` assignment.
+ */
+function setNativeValue(el, value) {
+  try {
+    const proto = (el.tagName === 'TEXTAREA') ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) { desc.set.call(el, value); return true; }
+  } catch (e) { /* fall through to plain assignment */ }
+  try { el.value = value; return true; } catch (e) { return false; }
+}
+
+/**
  * Honest photo counter: counts the actual uploaded vehicle photo previews in the
  * listing form. Facebook renders uploaded photos as sizeable blob: <img> previews,
  * so we count those (ignoring tiny UI blobs and Facebook's own scontent CDN chrome).
@@ -1790,7 +1804,7 @@ async function fillTitle() {
   
   // Clear existing value
   if (titleInput.value !== undefined) {
-    titleInput.value = '';
+    setNativeValue(titleInput, '');
   }
   if (titleInput.textContent !== undefined) {
     titleInput.textContent = '';
@@ -1803,7 +1817,7 @@ async function fillTitle() {
   
   // Set new value - handle both input and contenteditable
   if (titleInput.tagName === 'INPUT' || titleInput.tagName === 'TEXTAREA') {
-    titleInput.value = title;
+    setNativeValue(titleInput, title);
   } else {
     titleInput.textContent = title;
     titleInput.innerText = title;
@@ -1819,9 +1833,13 @@ async function fillTitle() {
   titleInput.blur();
   await sleep(50);
   titleInput.focus();
-  
+
   await sleep(200);
-  return true;
+  // Verify the value actually stuck (React can silently revert a plain assignment)
+  if (titleInput.tagName === 'INPUT' || titleInput.tagName === 'TEXTAREA') {
+    return (titleInput.value || '').trim().length > 0;
+  }
+  return (titleInput.textContent || titleInput.innerText || '').trim().length > 0;
 }
 
 /**
@@ -1985,7 +2003,7 @@ async function fillPrice() {
   
   // Clear existing value
   if (priceInput.value !== undefined) {
-    priceInput.value = '';
+    setNativeValue(priceInput, '');
   }
   if (priceInput.textContent !== undefined) {
     priceInput.textContent = '';
@@ -1995,7 +2013,7 @@ async function fillPrice() {
   
   // Set new value
   if (priceInput.tagName === 'INPUT' || priceInput.tagName === 'TEXTAREA') {
-    priceInput.value = priceValue;
+    setNativeValue(priceInput, priceValue);
   } else {
     priceInput.textContent = priceValue;
     priceInput.innerText = priceValue;
@@ -2011,9 +2029,13 @@ async function fillPrice() {
   priceInput.blur();
   await sleep(50);
   priceInput.focus();
-  
+
   await sleep(200);
-  return true;
+  // Verify the value actually stuck (React can silently revert a plain assignment)
+  if (priceInput.tagName === 'INPUT' || priceInput.tagName === 'TEXTAREA') {
+    return (priceInput.value || '').trim().length > 0;
+  }
+  return (priceInput.textContent || priceInput.innerText || '').trim().length > 0;
 }
 
 /**
@@ -2120,7 +2142,7 @@ async function fillDescription() {
   
   // Clear existing content - try multiple methods
   if (textarea.tagName === 'TEXTAREA' || textarea.tagName === 'INPUT') {
-    textarea.value = '';
+    setNativeValue(textarea, '');
   } else {
     textarea.textContent = '';
     textarea.innerText = '';
@@ -2133,7 +2155,7 @@ async function fillDescription() {
   
   // Set new content - handle both textarea and contenteditable
   if (textarea.tagName === 'TEXTAREA' || textarea.tagName === 'INPUT') {
-    textarea.value = generatedDescription;
+    setNativeValue(textarea, generatedDescription);
   } else {
     // Contenteditable div
     textarea.textContent = generatedDescription;
@@ -2249,7 +2271,7 @@ async function fillLocation() {
       const city = extractCityFromAddress(vehicleData.address);
       if (city) {
         input.focus();
-        input.value = city;
+        setNativeValue(input, city);
         input.dispatchEvent(new Event('input', { bubbles: true }));
         await sleep(500);
         
