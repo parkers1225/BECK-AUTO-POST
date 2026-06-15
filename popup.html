@@ -7,7 +7,18 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-<div class="app">
+<div class="gate" id="gate" hidden>
+  <div class="gate__card">
+    <div class="gate__brand"><span class="brand__mark">beck</span><span class="brand__tag">Auto-Post</span></div>
+    <h1 class="gate__title">Enter your access code</h1>
+    <p class="gate__sub">Your manager gave you a code that connects you to your store.</p>
+    <input class="input" id="gateCode" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" aria-label="Access code">
+    <div class="gate__err" id="gateErr"></div>
+    <button class="btn btn--primary btn--block" id="gateBtn"><span id="gateBtnLabel">Continue</span></button>
+    <p class="gate__hint">Don't have a code? Ask your store manager.</p>
+  </div>
+</div>
+<div class="app" id="app">
 
   <!-- Top bar -->
   <header class="topbar">
@@ -131,17 +142,20 @@
     <button class="icon-btn" id="btnCloseSettings" aria-label="Close settings"><i class="ti ti-x" aria-hidden="true"></i></button>
   </div>
   <div class="drawer__body">
-    <div class="drawer__section">Store</div>
-    <div class="field"><label class="field__label" for="setStore">This device posts for</label><input class="input" id="setStore" placeholder="beck-cdjr"></div>
+    <div class="drawer__section">Account</div>
+    <div class="account">
+      <div class="account__av" id="acctAv">–</div>
+      <div><div class="account__n" id="acctName">—</div><div class="account__s" id="acctStore">—</div></div>
+    </div>
+    <button class="btn btn--ghost btn--block" id="btnSignOut"><i class="ti ti-x" aria-hidden="true"></i>Sign out / change code</button>
     <div class="drawer__section">AI description</div>
     <div class="field"><label class="field__label" for="setAiService">Service</label>
       <select class="select" id="setAiService"><option value="openai">OpenAI</option><option value="anthropic">Anthropic (Claude)</option></select></div>
     <div class="field"><label class="field__label" for="setApiKey">API key</label><input class="input" type="password" id="setApiKey" placeholder="sk-…" autocomplete="off"></div>
-    <div class="drawer__section">Inventory feed</div>
-    <div class="field"><label class="field__label" for="setProxyUrl">Proxy URL</label><input class="input" type="url" id="setProxyUrl" placeholder="https://beck-sftp-proxy-production.up.railway.app"></div>
-    <div class="field"><label class="field__label" for="setStoreKey">Feed API key</label><input class="input" type="password" id="setStoreKey" placeholder="store key" autocomplete="off"></div>
     <div class="drawer__section">Auto-refresh</div>
     <div class="field"><label class="field__label" for="setRefresh">Sync every (minutes)</label><input class="input" type="number" id="setRefresh" min="5" max="120" value="15"></div>
+    <div class="drawer__section">Advanced</div>
+    <div class="field"><label class="field__label" for="setProxyUrl">Server URL</label><input class="input" type="url" id="setProxyUrl" placeholder="https://beck-sftp-proxy-production.up.railway.app"></div>
     <button class="btn btn--primary btn--block" id="btnSaveSettings" style="margin-top:16px"><i class="ti ti-check" aria-hidden="true"></i>Save settings</button>
   </div>
 </aside>

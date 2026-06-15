@@ -15,6 +15,7 @@ const PORT = process.env.PORT || 3000;
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const users = require('./users');
 
 // Cache TTL in milliseconds (default: 5 minutes)
 const CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_MINUTES || '5') * 60 * 1000;
@@ -55,6 +56,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+app.use(express.json({ limit: '256kb' }));
 
 if (!ALLOWED_ORIGINS) {
   console.warn('⚠️  CORS is open to all origins. Set ALLOWED_ORIGINS env var to restrict.');
@@ -283,6 +286,31 @@ function verifyApiKey(req, storeId) {
   return apiKey === storeApiKey;
 }
 
+// Fetch (if stale) and send a store's CSV with change-detection headers.
+// Shared by the legacy /csv/:storeId route and the code-authed /feed route.
+async function serveStoreCsv(res, storeId) {
+  if (!isCacheFresh(storeId)) {
+    try {
+      await fetchCSVFromSFTP(storeId);
+    } catch (error) {
+      console.error(`Failed to fetch CSV for ${storeId}:`, error.message);
+      if (csvCache[storeId].content) {
+        console.log(`Using stale cached CSV for ${storeId}`);
+      } else {
+        return res.status(500).json({ error: 'Failed to fetch CSV from SFTP', message: error.message });
+      }
+    }
+  }
+  const cache = csvCache[storeId];
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('X-CSV-Hash', cache.hash || '');
+  res.setHeader('X-CSV-Last-Modified', (cache.lastModified instanceof Date ? cache.lastModified.toISOString() : (cache.lastModified ? new Date(cache.lastModified).toISOString() : '')));
+  res.setHeader('X-CSV-Last-Fetch', cache.lastFetch?.toISOString() || '');
+  res.setHeader('X-CSV-Size', cache.size || 0);
+  res.setHeader('X-CSV-Cached', isCacheFresh(storeId) ? 'true' : 'false');
+  res.send(cache.content);
+}
+
 // Health check endpoint (no authentication)
 app.get('/health', (req, res) => {
   const storeList = Object.keys(stores).map(storeId => ({
@@ -323,44 +351,12 @@ app.get('/csv/:storeId', async (req, res) => {
     return res.status(404).json({ error: `Store ${storeId} not found` });
   }
 
-  // Verify API key
+  // Verify API key (legacy access path)
   if (!verifyApiKey(req, storeId)) {
     return res.status(401).json({ error: 'Unauthorized - Invalid or missing API key' });
   }
 
-  // Only fetch from SFTP if cache is stale or empty
-  if (!isCacheFresh(storeId)) {
-    try {
-      await fetchCSVFromSFTP(storeId);
-    } catch (error) {
-      console.error(`Failed to fetch CSV for ${storeId}:`, error.message);
-      
-      // If we have cached content, use it (even if stale)
-      if (csvCache[storeId].content) {
-        console.log(`Using stale cached CSV for ${storeId}`);
-      } else {
-        return res.status(500).json({ 
-          error: 'Failed to fetch CSV from SFTP',
-          message: error.message 
-        });
-      }
-    }
-  } else {
-    console.log(`📦 Serving cached CSV for ${storeId} (age: ${Math.round((Date.now() - csvCache[storeId].lastFetch.getTime()) / 1000)}s)`);
-  }
-
-  const cache = csvCache[storeId];
-  
-  // Set response headers
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('X-CSV-Hash', cache.hash || '');
-  res.setHeader('X-CSV-Last-Modified', (cache.lastModified instanceof Date ? cache.lastModified.toISOString() : (cache.lastModified ? new Date(cache.lastModified).toISOString() : '')));
-  res.setHeader('X-CSV-Last-Fetch', cache.lastFetch?.toISOString() || '');
-  res.setHeader('X-CSV-Size', cache.size || 0);
-  res.setHeader('X-CSV-Cached', isCacheFresh(storeId) ? 'true' : 'false');
-
-  // Send CSV content
-  res.send(cache.content);
+  return serveStoreCsv(res, storeId);
 });
 
 // Get CSV status for specific store
@@ -448,6 +444,95 @@ app.get('/image-proxy', async (req, res) => {
     res.status(400).json({ error: 'Invalid image URL', message: error.message });
   }
 });
+
+// ============================================================
+//  User management: access codes + admin page (Railway Postgres)
+// ============================================================
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a)).digest();
+  const hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+function adminAuth(req, res, next) {
+  if (!ADMIN_PASSWORD) return res.status(503).send('Admin not configured. Set ADMIN_PASSWORD on the server.');
+  const m = (req.headers.authorization || '').match(/^Basic\s+(.+)$/i);
+  if (m) {
+    const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+    const pass = decoded.slice(decoded.indexOf(':') + 1);
+    if (safeEqual(pass, ADMIN_PASSWORD)) return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="Beck Auto-Post Admin"');
+  return res.status(401).send('Authentication required');
+}
+
+function requireDb(res) {
+  if (!users.isReady()) {
+    res.status(503).json({ error: 'Database not connected yet. Add Postgres (DATABASE_URL) in Railway, then redeploy.' });
+    return false;
+  }
+  return true;
+}
+
+// Validate an access code -> assigned store
+app.post('/auth', async (req, res) => {
+  try {
+    if (!users.isReady()) return res.status(503).json({ success: false, error: 'User management not configured yet' });
+    const code = (req.body && req.body.code) || req.query.code;
+    const u = await users.lookupCode(code);
+    if (!u) return res.status(401).json({ success: false, error: 'Invalid or inactive access code' });
+    if (!stores[u.store]) return res.status(409).json({ success: false, error: `Assigned store "${u.store}" is not configured` });
+    res.json({ success: true, store: u.store, storeName: stores[u.store].name || u.store, name: u.name });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Code-authenticated inventory feed (store comes from the code, never the client)
+app.get('/feed', async (req, res) => {
+  try {
+    if (!users.isReady()) return res.status(503).json({ error: 'User management not configured yet' });
+    const code = req.headers['x-access-code'] || req.query.code;
+    const u = await users.lookupCode(code);
+    if (!u) return res.status(401).json({ error: 'Invalid or inactive access code' });
+    if (!stores[u.store]) return res.status(409).json({ error: `Assigned store "${u.store}" is not configured` });
+    return serveStoreCsv(res, u.store);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin page + API (HTTP Basic Auth via ADMIN_PASSWORD)
+app.get('/admin', adminAuth, (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
+app.get('/admin/api/users', adminAuth, async (req, res) => {
+  if (!requireDb(res)) return;
+  try { res.json(await users.listUsers()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/admin/api/users', adminAuth, async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const { name, store } = req.body || {};
+    if (!stores[store]) return res.status(400).json({ error: 'Unknown store' });
+    res.status(201).json(await users.addUser(name, store));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.patch('/admin/api/users/:id', adminAuth, async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const f = req.body || {};
+    if (f.store && !stores[f.store]) return res.status(400).json({ error: 'Unknown store' });
+    res.json(await users.updateUser(req.params.id, f));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/admin/api/users/:id', adminAuth, async (req, res) => {
+  if (!requireDb(res)) return;
+  try { await users.removeUser(req.params.id); res.status(204).end(); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Boot the user DB (non-fatal if DATABASE_URL is absent)
+users.initDb().catch(err => console.error('User DB init failed:', err.message));
 
 // Start server
 app.listen(PORT, () => {

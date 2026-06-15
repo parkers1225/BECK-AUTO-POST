@@ -5,9 +5,7 @@
 'use strict';
 
 const DEFAULTS = {
-  store: 'beck-cdjr',
   proxyUrl: 'https://beck-sftp-proxy-production.up.railway.app',
-  storeKey: '',            // resolved to `${store}-secret-key` if blank
   aiService: 'openai',
   aiApiKey: '',
   refreshMin: 15
@@ -30,6 +28,10 @@ const FILTERS = [
 
 const state = {
   settings: { ...DEFAULTS },
+  accessCode: null,
+  store: null,
+  storeName: '',
+  userName: '',
   step: 1,
   loading: true,
   vehicles: [],
@@ -49,8 +51,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const money = (n) => (n || n === 0) ? '$' + Number(n).toLocaleString('en-US') : '—';
 const milesFmt = (n, u) => (n || n === 0) ? Number(n).toLocaleString('en-US') + ' ' + (u || 'mi').toLowerCase() : '—';
-function storeKey() { return state.settings.storeKey || `${state.settings.store}-secret-key`; }
-function proxied(url) { return `${state.settings.proxyUrl.replace(/\/+$/, '')}/image-proxy?url=${encodeURIComponent(url)}`; }
+// (store + feed key are decided by the server from the user's access code)
 
 function toast(msg, kind) {
   const c = $('toasts'); if (!c) return;
@@ -145,11 +146,11 @@ function mapVehicle(o) {
    Inventory load + auto-refresh
    ============================================================ */
 async function loadInventory(silent) {
-  const s = state.settings;
-  const url = `${s.proxyUrl.replace(/\/+$/, '')}/csv/${encodeURIComponent(s.store)}?apiKey=${encodeURIComponent(storeKey())}`;
+  const base = state.settings.proxyUrl.replace(/\/+$/, '');
   try {
     if (!silent) { state.loading = true; if (state.step === 1) renderStep(); }
-    const res = await fetch(url, { cache: 'no-store' });
+    const res = await fetch(`${base}/feed`, { cache: 'no-store', headers: { 'X-Access-Code': state.accessCode || '' } });
+    if (res.status === 401) { showGate('Your access was turned off. Ask your manager for a new code.'); return false; }
     if (!res.ok) throw new Error('Feed returned ' + res.status);
     const text = await res.text();
     const rows = parseCSV(text);
@@ -533,48 +534,104 @@ function finishFill(resp, requested) {
    ============================================================ */
 function openSettings() {
   const s = state.settings;
-  $('setStore').value = s.store;
   $('setAiService').value = s.aiService;
   $('setApiKey').value = s.aiApiKey;
   $('setProxyUrl').value = s.proxyUrl;
-  $('setStoreKey').value = s.storeKey;
   $('setRefresh').value = s.refreshMin;
+  $('acctName').textContent = state.userName || 'Signed in';
+  $('acctStore').textContent = state.storeName || STORE_LABELS[state.store] || state.store || '';
+  $('acctAv').textContent = (state.userName || '?').trim().charAt(0).toUpperCase();
   $('settingsDrawer').classList.add('is-open');
   $('settingsBackdrop').classList.add('is-open');
 }
 function closeSettings() { $('settingsDrawer').classList.remove('is-open'); $('settingsBackdrop').classList.remove('is-open'); }
 async function saveSettings() {
-  const prevStore = state.settings.store;
+  const prevProxy = state.settings.proxyUrl;
   state.settings = {
-    store: ($('setStore').value || DEFAULTS.store).trim(),
     aiService: $('setAiService').value,
     aiApiKey: $('setApiKey').value.trim(),
     proxyUrl: ($('setProxyUrl').value || DEFAULTS.proxyUrl).trim(),
-    storeKey: $('setStoreKey').value.trim(),
     refreshMin: Math.max(5, Number($('setRefresh').value) || 15)
   };
   await sset({ beckSettings: state.settings, aiApiKey: state.settings.aiApiKey, aiService: state.settings.aiService });
   closeSettings();
-  $('storeName').textContent = STORE_LABELS[state.settings.store] || state.settings.store;
   scheduleRefresh();
   toast('Settings saved');
-  if (state.settings.store !== prevStore || state.step === 1) { state.sel = null; loadInventory(); }
+  if (state.settings.proxyUrl !== prevProxy) { state.sel = null; loadInventory(); }
+}
+
+/* ============================================================
+   Access-code gate + auth
+   ============================================================ */
+function showGate(err) {
+  $('app').hidden = true;
+  $('gate').hidden = false;
+  $('gateErr').textContent = err || '';
+  const b = $('gateBtn'); if (b) b.disabled = false;
+  $('gateBtnLabel').textContent = 'Continue';
+  setTimeout(() => { const c = $('gateCode'); if (c) c.focus(); }, 50);
+}
+function showApp() { $('gate').hidden = true; $('app').hidden = false; }
+
+async function authenticate(code) {
+  const base = state.settings.proxyUrl.replace(/\/+$/, '');
+  try {
+    const res = await fetch(`${base}/auth`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code })
+    });
+    if (res.status === 401) { showGate("That code isn't valid or has been turned off."); return false; }
+    if (res.status === 503) { showGate("Setup isn't finished yet — contact your admin."); return false; }
+    if (!res.ok) { showGate('Could not verify your code (server ' + res.status + ').'); return false; }
+    const data = await res.json();
+    if (!data || !data.success) { showGate((data && data.error) || 'Could not verify your code.'); return false; }
+    state.accessCode = code;
+    state.store = data.store;
+    state.storeName = data.storeName || STORE_LABELS[data.store] || data.store;
+    state.userName = data.name || '';
+    await sset({ accessCode: code });
+    $('storeName').textContent = state.storeName;
+    showApp();
+    return true;
+  } catch (e) {
+    showGate("Can't reach the server. Check your connection.");
+    return false;
+  }
+}
+
+async function submitCode() {
+  const code = ($('gateCode').value || '').trim().toUpperCase();
+  if (!code) { $('gateErr').textContent = 'Enter your access code.'; return; }
+  $('gateBtn').disabled = true; $('gateBtnLabel').textContent = 'Checking…';
+  const ok = await authenticate(code);
+  if (ok) { await loadInventory(); scheduleRefresh(); }
+}
+
+async function signOut() {
+  state.accessCode = null; state.store = null; state.sel = null; state.vehicles = [];
+  if (refreshTimer) clearInterval(refreshTimer);
+  await sset({ accessCode: null });
+  closeSettings();
+  $('gateCode').value = '';
+  showGate();
 }
 
 /* ============================================================
    Init
    ============================================================ */
 async function init() {
-  const saved = await sget(['beckSettings', 'aiApiKey', 'aiService']);
+  const saved = await sget(['beckSettings', 'aiApiKey', 'aiService', 'accessCode']);
   state.settings = { ...DEFAULTS, ...(saved.beckSettings || {}) };
   if (saved.aiApiKey && !state.settings.aiApiKey) state.settings.aiApiKey = saved.aiApiKey;
   if (saved.aiService) state.settings.aiService = saved.aiService;
-  $('storeName').textContent = STORE_LABELS[state.settings.store] || state.settings.store;
+  state.accessCode = saved.accessCode || null;
 
   $('btnSettings').onclick = openSettings;
   $('btnCloseSettings').onclick = closeSettings;
   $('settingsBackdrop').onclick = closeSettings;
   $('btnSaveSettings').onclick = saveSettings;
+  $('btnSignOut').onclick = signOut;
+  $('gateBtn').onclick = submitCode;
+  $('gateCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCode(); });
 
   $('invSearch').oninput = (e) => {
     state.search = e.target.value;
@@ -588,6 +645,9 @@ async function init() {
   });
 
   renderStep();
+  if (!state.accessCode) { showGate(); return; }
+  const ok = await authenticate(state.accessCode);
+  if (!ok) return;
   await loadInventory();
   scheduleRefresh();
 }

@@ -381,4 +381,22 @@ input,select,textarea{font-family:inherit}
 .ptile__ck{position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;background:var(--acc);color:#06142b;z-index:2}
 .ptile.is-off .ptile__ck{background:rgba(7,11,20,.65);color:var(--tx2);border:1px solid var(--line-2)}
 
+/* ---------- Access-code gate (first run) ---------- */
+.gate{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg);background-image:var(--bg-grad)}
+.gate__card{width:100%;max-width:330px;text-align:center}
+.gate__brand{display:flex;align-items:baseline;gap:7px;justify-content:center;margin-bottom:24px}
+.gate__title{font-family:var(--font-d);font-weight:600;font-size:21px;letter-spacing:-.02em;margin-bottom:7px}
+.gate__sub{font-size:12.5px;color:var(--tx2);margin-bottom:20px;line-height:1.55}
+.gate__card .input{text-align:center;font-size:18px;letter-spacing:.14em;font-family:var(--font-d);text-transform:uppercase}
+.gate__card .input::placeholder{letter-spacing:.14em}
+.gate__err{font-size:12.5px;color:var(--danger);min-height:17px;margin:10px 0}
+.gate__spin{display:flex;align-items:center;justify-content:center;gap:9px;color:var(--tx2);font-size:13px;padding:8px}
+.gate__hint{font-size:11.5px;color:var(--tx3);margin-top:18px;line-height:1.5}
+
+/* signed-in account row in settings */
+.account{display:flex;align-items:center;gap:11px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);padding:12px 13px;margin-bottom:12px}
+.account__av{width:38px;height:38px;border-radius:50%;background:var(--acc-grad);display:flex;align-items:center;justify-content:center;font-weight:600;color:#fff;flex:none;font-size:14px}
+.account__n{font-size:13.5px;font-weight:500;color:var(--tx)}
+.account__s{font-size:11.5px;color:var(--tx2);margin-top:1px}
+
 @media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
