@@ -123,7 +123,13 @@ function mapVehicle(o) {
   const price = num(o['sale_price']) || num(o['price']);
   const condRaw = (o['state_of_vehicle'] || o['condition'] || '').trim().toUpperCase();
   const cond = condRaw.includes('NEW') ? 'New' : 'Used';
-  const primary = (o['image[0].url'] || '').trim();
+  // Collect every photo the feed provides (image[0].url, image[1].url, …).
+  // Today vAuto exports only image[0]; this is ready for when it exports more.
+  const images = [];
+  for (let i = 0; i < 60; i++) {
+    const u = (o[`image[${i}].url`] || '').trim();
+    if (u) images.push(u);
+  }
   return {
     vin, year, make, model, trim,
     title: [year, make, model, trim].filter(Boolean).join(' '),
@@ -137,8 +143,9 @@ function mapVehicle(o) {
     stock: (o['vehicle_id'] || '').trim(),
     address: (o['address'] || '').trim(),
     vdp: (o['url'] || '').trim(),
-    primary,
-    hasPhoto: !!primary
+    primary: images[0] || '',
+    images,
+    hasPhoto: images.length > 0
   };
 }
 
@@ -283,30 +290,14 @@ function renderInventory() {
   list.querySelectorAll('.vrow').forEach(b => b.onclick = () => selectVehicle(+b.getAttribute('data-i')));
 }
 
-async function selectVehicle(i) {
+function selectVehicle(i) {
   state.sel = i;
   const v = state.vehicles[i];
   state.focus = 0; state.generated = false; state.desc = '';
-  state.photos = v.primary ? [v.primary] : [];
+  state.photos = (v.images || []).slice();
   state.picked = new Set(state.photos.map((_, k) => k).slice(0, MAX_PHOTOS));
   go(2);
   toast(`${v.title} selected`);
-  // best-effort: pull the full gallery from the vehicle's dealer site via the worker
-  try {
-    let dealerUrl = '';
-    try { dealerUrl = v.vdp ? new URL(v.vdp).origin : ''; } catch (e) {}
-    if (dealerUrl) {
-      const resp = await send('fetchDealerPhotos', { vin: v.vin, dealerUrl, make: v.make });
-      const extra = (resp && resp.success) ? (resp.photoUrls || resp.photos || []) : [];
-      if (Array.isArray(extra) && extra.length && state.sel === i) {
-        const seen = new Set(state.photos);
-        extra.forEach(u => { if (u && !seen.has(u)) { seen.add(u); state.photos.push(u); } });
-        state.picked = new Set(state.photos.map((_, k) => k).slice(0, MAX_PHOTOS));
-        if (state.step === 2) renderPhotos();
-        updateDock();
-      }
-    }
-  } catch (e) { /* best-effort only */ }
 }
 
 function renderPhotos() {
