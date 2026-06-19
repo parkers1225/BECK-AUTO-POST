@@ -1582,7 +1582,7 @@ async function fillMileageFieldAfterVehicleType() {
       const mileageField = await findMileageField();
       let expectedMileage = parseInt(vehicleData.mileage) || 0;
       if (expectedMileage < 300) expectedMileage = 301;
-      const currentValue = mileageField ? getFieldValue(mileageField) : null;
+      const currentValue = mileageField ? (mileageField.value || mileageField.textContent || '') : null;
       if (currentValue && String(currentValue).replace(/[^0-9]/g, '') === expectedMileage.toString()) {
         console.log(`✓ Mileage field filled and persisted successfully (attempt ${attempt + 1})`);
         return true;
@@ -1947,8 +1947,8 @@ function findPriceInput() {
  * Fill price field
  */
 async function fillPrice() {
-  const price = vehicleData.price || '';
-  const priceValue = price.replace(/[^0-9]/g, '');
+  const price = vehicleData.price != null ? vehicleData.price : '';
+  const priceValue = String(price).replace(/[^0-9]/g, '');
   
   if (!priceValue) {
     console.warn('No price value to fill. Original price:', price);
