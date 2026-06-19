@@ -58,7 +58,8 @@ function genCode() {
   return s.slice(0, 4) + '-' + s.slice(4);
 }
 
-function normalize(code) { return String(code || '').trim().toUpperCase(); }
+// Forgiving: ignore case, spaces, dashes — "mvm6 wy5x" == "MVM6-WY5X".
+function normalize(code) { return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 
 /** Resolve a code to an active user, or null. Cached briefly. */
 async function lookupCode(code) {
@@ -68,7 +69,7 @@ async function lookupCode(code) {
   const hit = cache.get(key);
   if (hit && hit.exp > Date.now()) return hit.user;
   const { rows } = await pool.query(
-    'SELECT id, name, store, active FROM app_users WHERE code = $1', [key]
+    "SELECT id, name, store, active FROM app_users WHERE upper(replace(code, '-', '')) = $1", [key]
   );
   const row = rows[0];
   const user = (row && row.active) ? { id: row.id, name: row.name, store: row.store } : null;
