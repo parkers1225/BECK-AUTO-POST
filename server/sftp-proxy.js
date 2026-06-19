@@ -323,7 +323,9 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     stores: storeList,
-    multiStore: isMultiStore
+    multiStore: isMultiStore,
+    aiConfigured: !!ANTHROPIC_API_KEY,   // boolean only — never exposes the key
+    aiModel: ANTHROPIC_MODEL
   });
 });
 
