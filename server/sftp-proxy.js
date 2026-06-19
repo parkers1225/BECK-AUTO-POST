@@ -327,6 +327,9 @@ app.get('/health', (req, res) => {
     aiConfigured: !!ANTHROPIC_API_KEY,   // boolean only — never exposes the key
     aiKeyPresent: ('ANTHROPIC_API_KEY' in process.env), // is the env var defined at all on this service?
     aiKeyLen: (process.env.ANTHROPIC_API_KEY || '').length, // length only, never the value
+    // Diagnostic: env-var NAMES (not values) related to the AI key, with each
+    // name JSON-quoted so hidden trailing spaces / odd chars are visible.
+    aiEnvNames: Object.keys(process.env).filter(k => /anthrop|claude|api[_ ]?key/i.test(k)).map(k => JSON.stringify(k)),
     aiModel: ANTHROPIC_MODEL
   });
 });
