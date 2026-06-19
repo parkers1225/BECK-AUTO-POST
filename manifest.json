@@ -20,6 +20,8 @@
     "https://api.anthropic.com/*",
     "https://assets.cai-media-management.com/*",
     "https://*.cai-media-management.com/*",
+    "https://dm-next-images.s3.us-east-2.amazonaws.com/*",
+    "https://dm-next-images.s3.amazonaws.com/*",
     "https://vehicle-photos-published.vauto.com/*",
     "https://*.beckchryslerdodgejeep.com/*",
     "https://*.becknissan.com/*",

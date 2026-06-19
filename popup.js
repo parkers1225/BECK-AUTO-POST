@@ -294,10 +294,32 @@ function selectVehicle(i) {
   state.sel = i;
   const v = state.vehicles[i];
   state.focus = 0; state.generated = false; state.desc = '';
-  state.photos = (v.images || []).slice();
+  state.photos = (v.images || []).slice();   // instant: the feed's primary photo
   state.picked = new Set(state.photos.map((_, k) => k).slice(0, MAX_PHOTOS));
   go(2);
   toast(`${v.title} selected`);
+  loadGallery(i, v);                          // then pull the full DealerMade gallery
+}
+
+// Pull the vehicle's full photo gallery from the proxy (DealerMade) and swap it in.
+async function loadGallery(i, v) {
+  let domain = '';
+  try { domain = v.vdp ? new URL(v.vdp).hostname : ''; } catch (e) {}
+  if (!v.vin || !domain) return;
+  try {
+    const base = state.settings.proxyUrl.replace(/\/+$/, '');
+    const res = await fetch(`${base}/photos?vin=${encodeURIComponent(v.vin)}&domain=${encodeURIComponent(domain)}`,
+      { headers: { 'X-Access-Code': state.accessCode || '' } });
+    if (!res.ok) return;
+    const data = await res.json();
+    const gallery = (data && data.photos) || [];
+    if (gallery.length && state.sel === i) {
+      state.photos = gallery;
+      state.picked = new Set(state.photos.map((_, k) => k).slice(0, MAX_PHOTOS));
+      if (state.step === 2) renderPhotos();
+      updateDock();
+    }
+  } catch (e) { /* keep the feed photo on failure */ }
 }
 
 function renderPhotos() {

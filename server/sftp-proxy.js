@@ -534,6 +534,87 @@ app.delete('/admin/api/users/:id', adminAuth, async (req, res) => {
 // Boot the user DB (non-fatal if DATABASE_URL is absent)
 users.initDb().catch(err => console.error('User DB init failed:', err.message));
 
+// ============================================================
+//  DealerMade gallery photos (public GraphQL API, no auth needed)
+//  Returns every gallery photo for a vehicle by VIN + dealer domain.
+// ============================================================
+const DM_GRAPHQL = 'https://api.dealermade-next.com/v4/graphql';
+const dmDomainCache = new Map();   // domain -> { id, exp }
+const dmPhotoCache = new Map();    // vin|domain -> { urls, exp }
+const DM_DOMAIN_TTL = 12 * 60 * 60 * 1000;
+const DM_PHOTO_TTL = 60 * 60 * 1000;
+
+function dmPost(query, variables) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({ query, variables });
+    const u = new URL(DM_GRAPHQL);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname, method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) }
+    }, (r) => {
+      let buf = '';
+      r.on('data', c => buf += c);
+      r.on('end', () => {
+        try {
+          const j = JSON.parse(buf);
+          if (j.errors) return reject(new Error(j.errors[0].message));
+          resolve(j.data);
+        } catch (e) { reject(new Error('Bad response from DealerMade')); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => req.destroy(new Error('DealerMade request timed out')));
+    req.write(data); req.end();
+  });
+}
+
+function cleanDomain(d) {
+  return String(d || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+}
+
+async function dmDealerWebsiteId(domain) {
+  const key = cleanDomain(domain);
+  const c = dmDomainCache.get(key);
+  if (c && c.exp > Date.now()) return c.id;
+  const d = await dmPost('query($domain:String){dealerWebsiteForDomain(domain:$domain){id}}', { domain: key });
+  const id = (d && d.dealerWebsiteForDomain && d.dealerWebsiteForDomain.id) || null;
+  dmDomainCache.set(key, { id, exp: Date.now() + DM_DOMAIN_TTL });
+  return id;
+}
+
+async function dmGalleryPhotos(vin, domain) {
+  const id = await dmDealerWebsiteId(domain);
+  if (!id) return [];
+  const d = await dmPost(
+    'query($vin:String!,$id:UUID!){vehicleByVinAndDealerWebsiteId(vin:$vin,dealerWebsiteId:$id){galleryPictureUrls}}',
+    { vin, id });
+  const v = d && d.vehicleByVinAndDealerWebsiteId;
+  const urls = (v && v.galleryPictureUrls) || [];
+  return urls.map(u => (typeof u === 'string' && u.startsWith('//')) ? 'https:' + u : u).filter(Boolean);
+}
+
+// GET /photos?vin=...&domain=...  ->  { photos: [url, ...] }   (access-code gated when DB is on)
+app.get('/photos', async (req, res) => {
+  try {
+    if (users.isReady()) {
+      const code = req.headers['x-access-code'] || req.query.code;
+      const u = await users.lookupCode(code);
+      if (!u) return res.status(401).json({ error: 'Invalid or inactive access code' });
+    }
+    const vin = String(req.query.vin || '').trim();
+    const domain = cleanDomain(req.query.domain);
+    if (!vin || !domain) return res.status(400).json({ error: 'vin and domain are required' });
+    const ck = vin + '|' + domain;
+    const cached = dmPhotoCache.get(ck);
+    if (cached && cached.exp > Date.now()) return res.json({ photos: cached.urls, cached: true });
+    const urls = await dmGalleryPhotos(vin, domain);
+    dmPhotoCache.set(ck, { urls, exp: Date.now() + DM_PHOTO_TTL });
+    res.json({ photos: urls });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 SFTP Proxy Service running on port ${PORT}`);
