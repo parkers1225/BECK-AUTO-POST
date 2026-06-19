@@ -16,8 +16,6 @@
     "https://www.facebook.com/*",
     "https://*.facebook.com/*",
     "https://beck-sftp-proxy-production.up.railway.app/*",
-    "https://api.openai.com/*",
-    "https://api.anthropic.com/*",
     "https://assets.cai-media-management.com/*",
     "https://*.cai-media-management.com/*",
     "https://dm-next-images.s3.us-east-2.amazonaws.com/*",

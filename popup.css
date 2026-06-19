@@ -158,6 +158,7 @@ input,select,textarea{font-family:inherit}
 .card + .card{margin-top:12px}
 .field{margin-bottom:13px}
 .field__label{display:block;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--tx3);margin-bottom:7px}
+.field__hint{font-size:12px;line-height:1.5;color:var(--tx3)}
 .input,.textarea,.select,.search input{
   width:100%;background:var(--surface);border:1px solid var(--line);
   color:var(--tx);font-size:14px;padding:11px 13px;border-radius:var(--r);

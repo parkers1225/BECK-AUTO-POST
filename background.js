@@ -110,147 +110,35 @@ async function handleParseCSV(data, sendResponse) {
  */
 async function handleGenerateDescription(data, sendResponse) {
   try {
-    const settings = await chrome.storage.local.get(['aiApiKey', 'aiService']);
-    
-    if (!settings.aiApiKey) {
-      sendResponse({ success: false, error: 'API key not configured' });
+    // Descriptions are generated server-side by the proxy, which holds the
+    // Anthropic key in its env. The extension just forwards the rep's access
+    // code — the key is never stored in or shipped with the extension.
+    const store = await chrome.storage.local.get(['accessCode', 'beckSettings', 'proxyUrl']);
+    const base = ((store.beckSettings && store.beckSettings.proxyUrl) || store.proxyUrl ||
+      'https://beck-sftp-proxy-production.up.railway.app').replace(/\/+$/, '');
+
+    const response = await fetch(`${base}/generate-description`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Access-Code': store.accessCode || '' },
+      body: JSON.stringify({ vehicleData: data.vehicleData, userPrompt: data.userPrompt })
+    });
+
+    if (response.status === 401) {
+      sendResponse({ success: false, error: 'Your access code is invalid or was turned off.' });
       return;
     }
-    
-    const service = settings.aiService || 'openai';
-    const prompt = buildAIPrompt(data.vehicleData, data.userPrompt);
-    
-    let description;
-    if (service === 'openai') {
-      description = await generateWithOpenAI(settings.aiApiKey, prompt);
-    } else if (service === 'anthropic') {
-      description = await generateWithAnthropic(settings.aiApiKey, prompt);
-    } else {
-      sendResponse({ success: false, error: `Unsupported AI service: ${service}` });
+    if (!response.ok) {
+      let msg = `Server error ${response.status}`;
+      try { const e = await response.json(); if (e && e.error) msg = e.error; } catch (_) {}
+      sendResponse({ success: false, error: msg });
       return;
     }
-    
-    sendResponse({ success: true, description });
+
+    const out = await response.json();
+    sendResponse({ success: true, description: (out && out.description) || '' });
   } catch (error) {
     sendResponse({ success: false, error: error.message });
   }
-}
-
-/**
- * Build AI prompt from vehicle data
- */
-function buildAIPrompt(vehicleData, userPrompt) {
-  const vehicleInfo = `
-Vehicle Information:
-- Year: ${vehicleData.year || 'N/A'}
-- Make: ${vehicleData.make || 'N/A'}
-- Model: ${vehicleData.model || 'N/A'}
-- Trim: ${vehicleData.trim || 'N/A'}
-- Price: $${vehicleData.price || 'N/A'}
-- Mileage: ${vehicleData.mileage || 'N/A'} ${vehicleData.mileageUnit || 'miles'}
-- Color: ${vehicleData.color || 'N/A'}
-- Transmission: ${vehicleData.transmission || 'N/A'}
-- Fuel Type: ${vehicleData.fuelType || 'N/A'}
-- Body Style: ${vehicleData.bodyStyle || 'N/A'}
-- Drivetrain: ${vehicleData.drivetrain || 'N/A'}
-- Condition: ${vehicleData.condition || 'N/A'}
-- VIN: ${vehicleData.vin || 'N/A'}
-
-${vehicleData.description ? `Original Description (NOTE: Ignore any dealership names, phone numbers, or business references in this):\n${vehicleData.description.substring(0, 1000)}` : ''}
-`;
-
-  return `You are an expert at writing engaging Facebook Marketplace listings for vehicles. 
-
-${vehicleInfo}
-
-User's specific requirements: ${userPrompt || 'Create an engaging, professional description optimized for Facebook Marketplace'}
-
-CRITICAL REQUIREMENTS - MUST FOLLOW:
-- NEVER mention dealership name, dealership business name, or the word "dealership" anywhere in the description
-- NEVER include any phone number in the description (even if present in original description)
-- If the original description contains dealership info or phone numbers, completely exclude them
-- ALWAYS end with a call-to-action directing buyers to "DM me on Facebook for more details" or similar Facebook messaging instruction
-- Optimize specifically for Facebook Marketplace format (use emojis sparingly, short paragraphs, clear sections)
-
-Please generate a compelling Facebook Marketplace listing description that:
-1. Starts with an attention-grabbing headline
-2. Highlights key features and selling points
-3. Uses proper formatting with bullet points and line breaks for readability
-4. Includes relevant details about condition, mileage, and features
-5. Ends with: "DM me on Facebook for more details" or similar Facebook messaging instruction
-6. Is optimized for Facebook Marketplace's format and audience (short paragraphs, easy to scan)
-7. Is concise but comprehensive (aim for 300-500 words)
-8. Uses a friendly, personal tone (as if selling as an individual, not a business)
-
-Generate only the description text, no additional commentary.`;
-}
-
-/**
- * Generate description using OpenAI API
- */
-async function generateWithOpenAI(apiKey, prompt) {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a professional automotive copywriter specializing in Facebook Marketplace listings. NEVER mention dealership names or phone numbers. Always direct buyers to DM on Facebook for details.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      temperature: 0.7,
-      max_tokens: 1000
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || `OpenAI API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  return data.choices[0]?.message?.content?.trim() || '';
-}
-
-/**
- * Generate description using Anthropic Claude API
- */
-async function generateWithAnthropic(apiKey, prompt) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        }
-      ]
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || `Anthropic API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  return data.content[0]?.text?.trim() || '';
 }
 
 /**

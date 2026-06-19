@@ -615,6 +615,113 @@ app.get('/photos', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// AI description generation (Anthropic)
+// The Anthropic key lives ONLY here in the proxy's env (ANTHROPIC_API_KEY),
+// never in the extension. Reps with a valid access code get descriptions with
+// zero key setup, and the key can't be extracted from the distributed extension.
+// ---------------------------------------------------------------------------
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+
+function anthropicGenerate(prompt) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    const req = https.request({
+      hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(data),
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      }
+    }, (r) => {
+      let buf = '';
+      r.on('data', c => buf += c);
+      r.on('end', () => {
+        try {
+          const j = JSON.parse(buf);
+          if (r.statusCode >= 400) return reject(new Error((j.error && j.error.message) || `Anthropic error ${r.statusCode}`));
+          const text = j.content && j.content[0] && j.content[0].text;
+          resolve((text || '').trim());
+        } catch (e) { reject(new Error('Bad response from Anthropic')); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(30000, () => req.destroy(new Error('Anthropic request timed out')));
+    req.write(data); req.end();
+  });
+}
+
+function buildVehiclePrompt(v, userPrompt) {
+  v = v || {};
+  const info = `Vehicle Information:
+- Year: ${v.year || 'N/A'}
+- Make: ${v.make || 'N/A'}
+- Model: ${v.model || 'N/A'}
+- Trim: ${v.trim || 'N/A'}
+- Price: $${v.price || 'N/A'}
+- Mileage: ${v.mileage || 'N/A'} ${v.mileageUnit || 'miles'}
+- Color: ${v.color || v.exterior_color || 'N/A'}
+- Transmission: ${v.transmission || 'N/A'}
+- Fuel Type: ${v.fuelType || 'N/A'}
+- Body Style: ${v.bodyStyle || v.body || 'N/A'}
+- Drivetrain: ${v.drivetrain || 'N/A'}
+- Condition: ${v.condition || 'N/A'}
+- VIN: ${v.vin || 'N/A'}
+
+${v.description ? `Original Description (NOTE: Ignore any dealership names, phone numbers, or business references in this):\n${String(v.description).substring(0, 1000)}` : ''}`;
+
+  return `You are an expert at writing engaging Facebook Marketplace listings for vehicles.
+
+${info}
+
+User's specific requirements: ${userPrompt || 'Create an engaging, professional description optimized for Facebook Marketplace'}
+
+CRITICAL REQUIREMENTS - MUST FOLLOW:
+- NEVER mention dealership name, dealership business name, or the word "dealership" anywhere in the description
+- NEVER include any phone number in the description (even if present in original description)
+- If the original description contains dealership info or phone numbers, completely exclude them
+- ALWAYS end with a call-to-action directing buyers to "DM me on Facebook for more details" or similar Facebook messaging instruction
+- Optimize specifically for Facebook Marketplace format (use emojis sparingly, short paragraphs, clear sections)
+
+Please generate a compelling Facebook Marketplace listing description that:
+1. Starts with an attention-grabbing headline
+2. Highlights key features and selling points
+3. Uses proper formatting with bullet points and line breaks for readability
+4. Includes relevant details about condition, mileage, and features
+5. Ends with: "DM me on Facebook for more details" or similar Facebook messaging instruction
+6. Is optimized for Facebook Marketplace's format and audience (short paragraphs, easy to scan)
+7. Is concise but comprehensive (aim for 300-500 words)
+8. Uses a friendly, personal tone (as if selling as an individual, not a business)
+
+Generate only the description text, no additional commentary.`;
+}
+
+// POST /generate-description  { vehicleData, userPrompt }  ->  { description }
+// Access-code gated, same as /feed and /photos.
+app.post('/generate-description', async (req, res) => {
+  try {
+    if (users.isReady()) {
+      const code = req.headers['x-access-code'] || (req.body && req.body.code);
+      const u = await users.lookupCode(code);
+      if (!u) return res.status(401).json({ error: 'Invalid or inactive access code' });
+    }
+    if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'AI is not configured on the server yet' });
+    const { vehicleData, userPrompt } = req.body || {};
+    if (!vehicleData) return res.status(400).json({ error: 'vehicleData is required' });
+    const description = await anthropicGenerate(buildVehiclePrompt(vehicleData, userPrompt));
+    if (!description) return res.status(502).json({ error: 'Empty response from AI' });
+    res.json({ description });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 SFTP Proxy Service running on port ${PORT}`);

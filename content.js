@@ -112,6 +112,71 @@ function setNativeValue(el, value) {
   try { el.value = value; return true; } catch (e) { return false; }
 }
 
+// Compare numeric field values (mileage, price) ignoring commas / $ / spaces.
+function normalizeDigits(v) { return String(v == null ? '' : v).replace(/[^0-9]/g, ''); }
+
+// Single source of truth for the mileage value we WRITE and VERIFY against.
+// Facebook rejects sub-300 odometer readings, so anything under 300 becomes 301.
+function getMileageTarget() {
+  let m = parseInt(vehicleData && vehicleData.mileage, 10) || 0;
+  if (m > 0 && m < 300) m = 301;
+  return String(m);
+}
+
+// Cheap, universal current-value reader for any found field. INPUT/TEXTAREA read
+// .value; everything else (combobox/contenteditable) reads textContent.
+function readFieldText(el) {
+  if (!el) return '';
+  if (typeof el.then === 'function') { console.error('readFieldText got a Promise — missing await'); return ''; }
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return (el.value || '').trim();
+  return (el.textContent || el.innerText || '').trim();
+}
+
+// Verify-and-repair pass. Runs AFTER the fast linear first pass: reads each field's
+// real DOM value, sets results.X honestly from that read, and re-fills ONLY the
+// fields that are empty/wrong. This is the safety net that catches mileage (or
+// anything) cleared by a late React re-render from the dropdown cascade. It reuses
+// the existing fillers, never touches photos, and is bounded so it always converges.
+async function verifyAndRepairForm(results, maxRounds = 2) {
+  const checks = [
+    { name: 'title', read: async () => readFieldText(findTitleInput()), ok: (v) => v.length > 0, refill: () => fillTitle() },
+    { name: 'price', read: async () => normalizeDigits(readFieldText(findPriceInput())), ok: (v) => v.length > 0, refill: () => fillPrice() },
+  ];
+  // Mileage is checked LAST and only when we have a value — it's the field most
+  // prone to being cleared, so we verify it after every other repair has settled.
+  if (vehicleData && vehicleData.mileage) {
+    checks.push({
+      name: 'mileage',
+      // Branch on element type: findMileageField can return a combobox/label whose
+      // textContent is the whole label container ("Mileage…"), which would never
+      // match and would loop. Only verify a real INPUT; treat a non-input mileage
+      // as already-handled by its own click-to-select path.
+      read: async () => {
+        const el = await findMileageField();
+        if (!el) return '';
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return normalizeDigits(el.value);
+        return getMileageTarget();
+      },
+      ok: (v) => v === getMileageTarget(),
+      refill: () => fillMileageField(),
+    });
+  }
+
+  for (let round = 0; round < maxRounds; round++) {
+    let allGood = true;
+    for (const c of checks) {
+      let cur = await c.read();
+      if (!c.ok(cur)) cur = await c.read();            // re-read once: dodge a transient null mid-render
+      if (c.ok(cur)) { results[c.name] = true; continue; }
+      allGood = false;
+      console.warn(`Repair: ${c.name} empty/wrong ("${cur}") — re-filling...`);
+      try { await c.refill(); } catch (e) { console.warn(`Repair of ${c.name} failed:`, e); }
+      results[c.name] = c.ok(await c.read());          // honest flag even on the final round
+    }
+    if (allGood) break;
+  }
+}
+
 /**
  * Honest photo counter: counts the actual uploaded vehicle photo previews in the
  * listing form. Facebook renders uploaded photos as sizeable blob: <img> previews,
@@ -206,6 +271,7 @@ async function fillMarketplaceForm() {
     make: false,
     model: false,
     vehicleType: false,
+    mileage: false,
     photos: false
   };
 
@@ -269,9 +335,9 @@ async function fillMarketplaceForm() {
       sendProgressUpdate(47, 'Model filled ✓');
     }
     
-    // Fill Mileage
+    // Fill Mileage (first pass; verifyAndRepairForm re-checks it at the end)
     if (vehicleData.mileage) {
-      await fillMileageFieldAfterVehicleType();
+      results.mileage = await fillMileageFieldAfterVehicleType();
       sendProgressUpdate(48, 'Mileage filled ✓');
     }
   } catch (error) {
@@ -381,16 +447,34 @@ async function fillMarketplaceForm() {
   }
 
   // Honest photo verification: Facebook adds the uploaded photos to its "N / 20"
-  // counter over a few seconds — poll and keep the highest count we observe.
+  // counter over a few seconds. Poll, but exit the instant we reach the requested
+  // count or the count plateaus — don't always burn the full loop.
   let photosAttached = 0;
   try {
+    let target = 0;
+    try {
+      const pd = await chrome.storage.local.get(['selectedPhotoData']);
+      const u = pd.selectedPhotoData && pd.selectedPhotoData.imageUrls;
+      target = Math.min(20, (u && u.length) ? u.length : (pd.selectedPhotoData && pd.selectedPhotoData.imageUrl ? 1 : 0));
+    } catch (e) {}
+    let stable = 0;
     for (let t = 0; t < 9; t++) {
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 350));
       const n = countVehiclePhotos();
-      if (n > photosAttached) photosAttached = n;
+      if (n > photosAttached) { photosAttached = n; stable = 0; }
+      else { stable++; }
+      if (target && photosAttached >= target) break;  // all photos in → stop
+      if (stable >= 2) break;                          // count plateaued → stop
     }
   } catch (e) {}
   results.photos = photosAttached > 0;
+
+  // Verify-and-repair pass — LOAD-BEARING ORDER: this must run AFTER photos are
+  // attached and after every dropdown-driven re-render has settled, so it can
+  // re-fill mileage (or anything) that a late re-render cleared, without ever
+  // competing with photo upload for focus. Do not move it earlier.
+  sendProgressUpdate(92, 'Verifying fields...');
+  try { await verifyAndRepairForm(results, 2); } catch (e) { console.warn('verify-and-repair failed:', e); }
 
   const successCount = Object.values(results).filter(Boolean).length;
   const totalFields = Object.keys(results).length;
@@ -1499,7 +1583,7 @@ async function fillModelFieldAfterVehicleType() {
           modelField.tagName === 'BUTTON' || modelField.getAttribute('role') === 'button') {
         console.log('Model field is a combobox, opening dropdown...');
         modelField.click();
-        await sleep(2000); // Wait for dropdown to open
+        await waitForElement(() => document.querySelector('[role="option"], [role="menuitem"]'), { timeout: 3000, interval: 50 }); // wait for dropdown to open
         
         // Search for the model option in the dropdown
         const options = document.querySelectorAll('[role="option"], [role="menuitem"], div[class*="option"], li[role="option"], label[role="option"], span[role="option"]');
@@ -1591,10 +1675,9 @@ async function fillMileageFieldAfterVehicleType() {
       // Wait and verify it persists
       await sleep(300);
       const mileageField = await findMileageField();
-      let expectedMileage = parseInt(vehicleData.mileage) || 0;
-      if (expectedMileage < 300) expectedMileage = 301;
+      const expectedMileage = getMileageTarget();
       const currentValue = mileageField ? (mileageField.value || mileageField.textContent || '') : null;
-      if (currentValue && String(currentValue).replace(/[^0-9]/g, '') === expectedMileage.toString()) {
+      if (currentValue && normalizeDigits(currentValue) === expectedMileage) {
         console.log(`✓ Mileage field filled and persisted successfully (attempt ${attempt + 1})`);
         return true;
       } else {
@@ -1612,7 +1695,7 @@ async function fillMileageFieldAfterVehicleType() {
  */
 async function findMileageField() {
   // Find Mileage field - be very specific to avoid matching Location field
-  const labels = Array.from(document.querySelectorAll('*')).filter(el => {
+  const labels = Array.from((document.querySelector('[role="main"]') || document.body).querySelectorAll('*')).filter(el => {
     if (el.offsetParent === null) return false;
     
     const text = (el.textContent || '').toLowerCase().trim();
@@ -2374,7 +2457,7 @@ async function fillVehicleType() {
               next.getAttribute('role') === 'combobox') {
             console.log('Clicking Vehicle Type field to open dropdown...');
             next.click();
-            await sleep(3000); // Wait longer for dropdown to fully open
+            await waitForElement(() => document.querySelector('[role="listbox"]:not([hidden]), [role="menu"]:not([hidden]), [role="option"]'), { timeout: 4000, interval: 50 }); // wait for dropdown to open
             
             // Wait for dropdown to appear - check multiple times with more patience
             let dropdownContainer = null;
@@ -2628,7 +2711,7 @@ async function fillVehicleType() {
           if (elem.tagName === 'BUTTON' || elem.getAttribute('role') === 'button' || 
               elem.getAttribute('role') === 'combobox') {
             elem.click();
-            await sleep(2000); // Wait longer for dropdown to fully open
+            await waitForElement(() => document.querySelector('[role="listbox"]:not([hidden]), [role="menu"]:not([hidden]), [role="option"]'), { timeout: 4000, interval: 50 }); // wait for dropdown to open
             
             // Wait for dropdown to appear - check multiple times
             let dropdownContainer = null;
@@ -2774,17 +2857,38 @@ async function fillVehicleType() {
  * Fill additional vehicle fields that appear after Vehicle Type selection:
  * Body Style, Exterior Color, Interior Color, Vehicle Condition, Fuel Type, Transmission Type, Mileage
  */
+// Map the feed's free-text body style onto Facebook Marketplace's fixed options.
+// The feed says things like "Sport Utility" / "Crew Cab Pickup"; Facebook's list
+// is SUV / Truck / Sedan / … — without this mapping they never lexically match.
+function normalizeBodyStyle(raw) {
+  const s = String(raw || '').toLowerCase().trim();
+  if (!s) return '';
+  if (/\b(suv|sport utility|crossover|cuv)\b/.test(s)) return 'SUV';
+  if (/(pickup|crew cab|quad cab|double cab|extended cab|regular cab|supercrew|supercab|king cab|access cab|mega cab|\btruck\b)/.test(s)) return 'Truck';
+  if (/\bmini-?van\b/.test(s)) return 'Minivan';
+  if (/(cargo van|passenger van|\bvan\b)/.test(s)) return 'Van';
+  if (/\b(convertible|cabriolet|roadster|spyder|spider)\b/.test(s)) return 'Convertible';
+  if (/\b(coupe|2[\s-]?door|2[\s-]?dr)\b/.test(s)) return 'Coupe';
+  if (/\b(hatchback|hatch|liftback)\b/.test(s)) return 'Hatchback';
+  if (/\b(wagon|estate)\b/.test(s)) return 'Wagon';
+  if (/\b(sedan|saloon|4[\s-]?door|4[\s-]?dr)\b/.test(s)) return 'Sedan';
+  return raw; // unknown → let the dropdown matcher try the raw value
+}
+
 async function fillAdditionalVehicleFields() {
   if (!vehicleData) return;
-  
-  // Fill Body Style
-  if (vehicleData.bodyStyle) {
-    await fillDropdownField('body style', vehicleData.bodyStyle);
+
+  // Fill Body Style — normalize the feed's body style (e.g. "Sport Utility",
+  // "Crew Cab Pickup") onto Facebook's option set (SUV, Truck, …) so it matches.
+  const bodyStyleVal = normalizeBodyStyle(vehicleData.bodyStyle || vehicleData.body);
+  if (bodyStyleVal) {
+    await fillDropdownField('body style', bodyStyleVal);
   }
   
-  // Fill Exterior Color
-  if (vehicleData.color || vehicleData.exteriorColor) {
-    await fillDropdownField('exterior color', vehicleData.color || vehicleData.exteriorColor);
+  // Fill Exterior Color (popup saves it under exterior_color)
+  const extColor = vehicleData.exterior_color || vehicleData.color || vehicleData.exteriorColor;
+  if (extColor) {
+    await fillDropdownField('exterior color', extColor);
   }
   
   // Fill Interior Color (if available, otherwise default to "Black")
@@ -2845,7 +2949,8 @@ async function fillAdditionalVehicleFields() {
     await fillDropdownField('transmission', vehicleData.transmission);
   }
   
-  // Note: Mileage is already filled in refillMileageField(), so we don't fill it again here
+  // Mileage is filled earlier (right after Vehicle Type) and re-verified by
+  // verifyAndRepairForm() after this runs, so we don't fill it again here.
 }
 
 /**
@@ -2949,7 +3054,7 @@ async function fillDropdownField(labelText, value) {
   // If it's a button or combobox, click to open dropdown
   if (field.tagName === 'BUTTON' || field.getAttribute('role') === 'combobox' || field.getAttribute('role') === 'button') {
     field.click();
-    await sleep(1500);
+    await waitForElement(() => document.querySelector('[role="option"], [role="menuitem"], div[class*="option"]'), { timeout: 3000, interval: 50 });
     
     // Search for the option - try multiple times as dropdown might be animating
     let matchingOption = null;
@@ -3124,75 +3229,6 @@ async function refillMakeField() {
 }
 
 /**
- * Re-fill Model field after Vehicle Type selection
- */
-async function refillModelField() {
-  if (!vehicleData.model) return false;
-  
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const modelField = findModelField();
-    if (modelField) {
-      console.log(`Re-filling Model field after Vehicle Type (attempt ${attempt + 1}):`, vehicleData.model);
-      modelField.focus();
-      await sleep(200);
-      
-      // Clear the field
-      if (modelField.value !== undefined) {
-        modelField.value = '';
-      } else if (modelField.textContent !== undefined) {
-        modelField.textContent = '';
-      } else if (modelField.innerText !== undefined) {
-        modelField.innerText = '';
-      }
-      
-      // Dispatch events to clear
-      modelField.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-      modelField.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-      await sleep(100);
-      
-      // Fill with the model value
-      if (modelField.value !== undefined) {
-        modelField.value = vehicleData.model;
-      } else if (modelField.textContent !== undefined) {
-        modelField.textContent = vehicleData.model;
-      } else if (modelField.innerText !== undefined) {
-        modelField.innerText = vehicleData.model;
-      }
-      
-      // Dispatch comprehensive events for React
-      modelField.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-      modelField.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-      await sleep(300);
-      console.log('✓ Model field re-filled successfully');
-      return true;
-    }
-    await sleep(500); // Wait before retry
-  }
-  
-  console.warn('Model field not found when trying to re-fill after Vehicle Type');
-  return false;
-}
-
-/**
- * Re-fill Mileage field after Vehicle Type selection
- */
-async function refillMileageField() {
-  if (!vehicleData.mileage) return false;
-  
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const filled = await fillMileageField();
-    if (filled) {
-      console.log('✓ Mileage field re-filled successfully');
-      return true;
-    }
-    await sleep(500); // Wait before retry
-  }
-  
-  console.warn('Mileage field not found when trying to re-fill after Vehicle Type');
-  return false;
-}
-
-/**
  * Fill Mileage field
  */
 async function fillMileageField() {
@@ -3216,194 +3252,70 @@ async function fillMileageField() {
   
   console.log('Found Mileage field, type:', field.tagName, 'role:', field.getAttribute('role'), 'tagName:', field.tagName);
   
-  // Apply minimum mileage rule: Facebook Marketplace requires minimum 300 miles
-  // If mileage is less than 300, set it to 301
-  let mileageValue = parseInt(vehicleData.mileage) || 0;
-  if (mileageValue < 300) {
-    console.log(`Mileage (${mileageValue}) is less than 300, adjusting to 301 to meet Facebook Marketplace minimum requirement`);
-    mileageValue = 301;
-  }
-  mileageValue = mileageValue.toString();
-  console.log('Mileage value to fill:', mileageValue);
-  
-  // Check if it's actually a combobox/dropdown (like Make/Model)
-  // IMPORTANT: INPUT elements should ALWAYS be treated as text inputs, even if they have role="combobox"
-  // Only treat as dropdown if it's NOT an input element (LABEL, BUTTON, etc.)
+  const mileageValue = getMileageTarget();
+  console.log('Mileage value to fill:', mileageValue, '(field type:', field.tagName + ')');
+
+  // Rare path: a true dropdown/combobox (LABEL/BUTTON), not a text input.
   const isInputElement = field.tagName === 'INPUT';
-  const isCombobox = (field.getAttribute('role') === 'combobox' || field.tagName === 'LABEL' || 
-                     field.tagName === 'BUTTON' || field.getAttribute('role') === 'button') && !isInputElement;
-  
-  console.log('Field analysis - isInputElement:', isInputElement, 'isCombobox:', isCombobox);
-  
+  const isCombobox = (field.getAttribute('role') === 'combobox' || field.tagName === 'LABEL' ||
+                      field.tagName === 'BUTTON' || field.getAttribute('role') === 'button') && !isInputElement;
   if (isCombobox) {
-    // It's a true dropdown (LABEL, BUTTON, etc.) - not an input field
-    console.log('Mileage field is a combobox dropdown, treating as dropdown...');
+    console.log('Mileage field is a combobox dropdown, selecting option...');
     field.focus();
-    await sleep(200);
+    await sleep(150);
     field.click();
-    await sleep(2000);
-    
-    // Search for the mileage value in dropdown options
+    await waitForElement(() => document.querySelector('[role="option"], [role="menuitem"]'), { timeout: 2500, interval: 50 });
     const options = document.querySelectorAll('[role="option"], [role="menuitem"], div[class*="option"], li[role="option"], label[role="option"], span[role="option"]');
     const mileageOption = Array.from(options).find(opt => {
       const optText = (opt.textContent || '').trim();
-      return optText === mileageValue || optText.includes(mileageValue) || mileageValue.includes(optText);
+      return optText === mileageValue || normalizeDigits(optText) === mileageValue;
     });
-    
     if (mileageOption) {
-      console.log('Found Mileage option in dropdown:', mileageOption.textContent);
       mileageOption.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      await sleep(300);
+      await sleep(150);
       mileageOption.click();
-      await sleep(500);
-      console.log('✓ Mileage field filled via dropdown');
+      await sleep(300);
+      console.log('✓ Mileage filled via dropdown');
       return true;
-    } else {
-      console.warn('Mileage option not found in dropdown. Available options (first 5):', 
-        Array.from(options).slice(0, 5).map(o => o.textContent.trim()));
-      // Fall through to input field handling
     }
-  } else {
-    // It's an INPUT element - treat as text input, even if it has role="combobox"
-    console.log('Mileage field is an INPUT element, treating as text input (not dropdown)');
+    console.warn('Mileage option not found in dropdown; falling through to input handling');
   }
-  
-  // Regular input field - use comprehensive filling
-  // For INPUT elements, we need to be very careful with React forms
-  console.log('Filling Mileage as text input field, value:', mileageValue);
-  
-  for (let fillAttempt = 0; fillAttempt < 8; fillAttempt++) {
-    if (fillAttempt > 0) {
-      await sleep(800); // Wait between retries
-    }
-    
-    // Re-find the field in case DOM changed
-    const currentField = await findMileageField();
-    if (!currentField) {
-      console.warn(`Mileage field not found (attempt ${fillAttempt + 1})`);
+
+  // Normal path: a text INPUT. Use the same React-safe setNativeValue mechanism
+  // that makes title/price reliable — far faster than char-by-char typing and it
+  // survives React re-renders. Read back; if React reverted it, re-find once and retry.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const input = (attempt === 0 && isInputElement) ? field : await findMileageField();
+    if (!input || (input.tagName !== 'INPUT' && input.tagName !== 'TEXTAREA')) {
+      await sleep(150);
       continue;
     }
-    
-    // Focus and clear
-    currentField.focus();
-    await sleep(300);
-    
-    // Clear the field - select all and delete
-    currentField.select();
-    await sleep(100);
-    currentField.value = '';
-    
-    // Dispatch clear events
-    currentField.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Delete' }));
-    currentField.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Delete' }));
-    currentField.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-    currentField.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-    await sleep(200);
-    
-    // Now fill the value - simulate real typing
-    currentField.focus();
-    await sleep(100);
-    
-    // Method 1: Set value directly
-    currentField.value = mileageValue;
-    currentField.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-    await sleep(100);
-    
-    // Method 2: Simulate typing each character (more React-friendly)
-    for (let i = 0; i < mileageValue.length; i++) {
-      const char = mileageValue[i];
-      const keyCode = char.charCodeAt(0);
-      
-      // Dispatch keyboard events
-      currentField.dispatchEvent(new KeyboardEvent('keydown', { 
-        bubbles: true, 
-        cancelable: true, 
-        key: char, 
-        code: `Digit${char}`,
-        keyCode: keyCode,
-        which: keyCode
-      }));
-      currentField.dispatchEvent(new KeyboardEvent('keypress', { 
-        bubbles: true, 
-        cancelable: true, 
-        key: char,
-        keyCode: keyCode,
-        which: keyCode
-      }));
-      
-      // Update value character by character
-      currentField.value = mileageValue.substring(0, i + 1);
-      currentField.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-      
-      currentField.dispatchEvent(new KeyboardEvent('keyup', { 
-        bubbles: true, 
-        cancelable: true, 
-        key: char,
-        keyCode: keyCode,
-        which: keyCode
-      }));
-      
-      await sleep(50); // Small delay between characters
-    }
-    
-    // Ensure final value is set
-    currentField.value = mileageValue;
-    
-    // Dispatch final events
-    currentField.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-    currentField.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-    currentField.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter' }));
-    currentField.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Enter' }));
-    currentField.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
-    
-    await sleep(500);
-    
-    // Verify the value was set
-    const currentValue = currentField.value;
-    if (currentValue === mileageValue || currentValue === vehicleData.mileage.toString()) {
-      // Value is set, wait longer and verify again to ensure it persists
-      await sleep(2000); // Longer wait for React to process
-      
-      // Re-check the field value
-      const persistedField = await findMileageField();
-      if (persistedField) {
-        const persistedValue = persistedField.value;
-        if (persistedValue === mileageValue || persistedValue === vehicleData.mileage.toString()) {
-          console.log(`✓ Mileage field filled and persisted (attempt ${fillAttempt + 1}):`, persistedValue);
-          return true;
-        } else {
-          console.warn(`Mileage field value cleared after wait (attempt ${fillAttempt + 1}). Expected: ${mileageValue}, Got: ${persistedValue}. Retrying...`);
-        }
-      } else {
-        console.warn(`Mileage field disappeared after fill (attempt ${fillAttempt + 1})`);
-      }
-    } else {
-      console.warn(`Mileage field value mismatch (attempt ${fillAttempt + 1}). Expected: ${mileageValue}, Got: ${currentValue}`);
-    }
-  }
-  
-  // Final attempt with maximum persistence
-  console.warn('Mileage field value not persisting after 8 attempts, making final aggressive attempt...');
-  const finalField = await findMileageField();
-  if (finalField) {
-    finalField.focus();
-    await sleep(300);
-    finalField.value = mileageValue;
-    finalField.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-    finalField.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-    finalField.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
-    await sleep(2000);
-    
-    const finalValue = finalField.value;
-    console.log('Mileage field final value:', finalValue, '(expected:', mileageValue, ')');
-    
-    if (finalValue === mileageValue || finalValue === vehicleData.mileage.toString()) {
-      console.log('✓ Mileage field filled successfully on final attempt');
+    input.focus();
+    setNativeValue(input, '');
+    setNativeValue(input, mileageValue);
+    // setNativeValue + an input dispatch is the load-bearing pair that fires React's
+    // onChange (same as title/price). Do not collapse to setNativeValue alone.
+    input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: ' ' }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: ' ' }));
+    input.blur();
+    await sleep(50);
+    input.focus();
+    await sleep(150);
+    // Read back from a fresh lookup in case the node was replaced by a re-render.
+    const check = await findMileageField();
+    const got = normalizeDigits(readFieldText(check));
+    if (got === mileageValue) {
+      console.log(`✓ Mileage filled via setNativeValue (attempt ${attempt + 1}):`, got);
       return true;
     }
+    console.warn(`Mileage didn't stick (attempt ${attempt + 1}); want ${mileageValue}, got "${got}". Retrying...`);
+    await sleep(150);
   }
-  
-  return false; // Return false if we couldn't persist the value
+
+  console.warn('Mileage could not be filled after 2 attempts');
+  return false;
 }
 
 /**
@@ -3535,7 +3447,7 @@ async function fillPhotos() {
         dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
         
         console.log('Drag-and-drop events dispatched, waiting...');
-        await sleep(3000);
+        await waitForCondition(() => detectUploadedPhotos(), { timeout: 3000, interval: 100 });
         
         if (detectUploadedPhotos()) {
           console.log('✓ Strategy 1 (Drag-and-Drop) succeeded!');
@@ -3594,7 +3506,7 @@ async function fillPhotos() {
         }
         
         if (called) {
-          await sleep(2000);
+          await waitForCondition(() => detectUploadedPhotos(), { timeout: 2500, interval: 100 });
           if (detectUploadedPhotos()) {
             console.log('✓ Strategy 2 (React fiber) succeeded!');
             return true;
@@ -3602,7 +3514,7 @@ async function fillPhotos() {
         }
         
         fileInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-        await sleep(2000);
+        await waitForCondition(() => detectUploadedPhotos(), { timeout: 2500, interval: 100 });
         if (detectUploadedPhotos()) {
           console.log('✓ Strategy 2 (change event) succeeded!');
           return true;
@@ -3632,7 +3544,7 @@ async function fillPhotos() {
         pasteTarget.dispatchEvent(pasteEvent);
         
         console.log('Paste event dispatched, waiting...');
-        await sleep(3000);
+        await waitForCondition(() => detectUploadedPhotos(), { timeout: 3000, interval: 100 });
         
         if (detectUploadedPhotos()) {
           console.log('✓ Strategy 3 (Clipboard paste) succeeded!');
@@ -3663,9 +3575,9 @@ async function fillPhotos() {
         
         fileInput.dispatchEvent(new Event('change', { bubbles: true }));
         fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-        
-        await sleep(2000);
-        
+
+        await waitForCondition(() => detectUploadedPhotos(), { timeout: 2000, interval: 100 });
+
         if (origDescriptor) {
           Object.defineProperty(fileInput, 'files', origDescriptor);
         } else {

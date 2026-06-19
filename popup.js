@@ -6,8 +6,6 @@
 
 const DEFAULTS = {
   proxyUrl: 'https://beck-sftp-proxy-production.up.railway.app',
-  aiService: 'openai',
-  aiApiKey: '',
   refreshMin: 15
 };
 const MAX_PHOTOS = 20;
@@ -421,7 +419,7 @@ async function generateDescription() {
   } else {
     renderDescription();
     const msg = (resp && resp.error) || 'Generation failed';
-    toast(/api key/i.test(msg) ? 'Add your AI API key in Settings' : msg, 'err');
+    toast(msg, 'err');
   }
 }
 
@@ -460,12 +458,40 @@ function updateTab(id, opts) { return new Promise(r => chrome.tabs.update(id, op
 function sendToTab(id, msg) { return new Promise(r => { try { chrome.tabs.sendMessage(id, msg, resp => { void chrome.runtime.lastError; r(resp); }); } catch (e) { r(null); } }); }
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Resolve once the tab finishes loading a new page (next 'complete' after we
+// start watching), or after a timeout. Used to wait out a renavigation so we
+// don't talk to the previous page's content script.
+function waitForTabComplete(tabId, timeoutMs = 15000) {
+  return new Promise(resolve => {
+    let settled = false;
+    const done = (val) => {
+      if (settled) return;
+      settled = true;
+      try { chrome.tabs.onUpdated.removeListener(onUpdated); } catch (e) {}
+      resolve(val);
+    };
+    const onUpdated = (id, info) => {
+      if (id === tabId && info.status === 'complete') done(true);
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    setTimeout(() => done(false), timeoutMs);
+  });
+}
+
 async function ensureMarketplaceTab() {
   let tabs = await queryTabs({ url: '*://*.facebook.com/marketplace/create/*' });
   if (tabs && tabs.length) {
     const t = tabs[0];
-    await updateTab(t.id, { active: true });
+    // Renavigate to a fresh create form so a re-run starts clean (otherwise the
+    // prior run's photos/fields linger and new photos stack on top of them).
+    // Attach the load listener BEFORE navigating, then wait for the new page to
+    // finish loading — otherwise we'd ping the stale content script from the
+    // previous run and fire fillForm into a page that's about to be torn down
+    // (which is exactly why a second fill silently did nothing).
+    const navDone = waitForTabComplete(t.id);
+    await updateTab(t.id, { url: FB_CREATE_URL, active: true });
     try { chrome.windows.update(t.windowId, { focused: true }); } catch (e) {}
+    await navDone;
     return t.id;
   }
   const t = await createTab({ url: FB_CREATE_URL, active: true });
@@ -501,7 +527,8 @@ async function fillMarketplace() {
     selectedVehicle: {
       vin: v.vin, year: v.year, make: v.make, model: v.model, trim: v.trim,
       title: v.title, price: v.price, mileage: v.mileage, mileageUnit: v.mileageUnit,
-      exterior_color: v.color, body: v.body, condition: v.cond, address: v.address
+      exterior_color: v.color, body: v.body, condition: v.cond, address: v.address,
+      bodyStyle: v.bodyStyle, fuelType: v.fuelType, transmission: v.transmission
     },
     generatedDescription: state.desc,
     selectedPhotoData: {
@@ -553,8 +580,6 @@ function finishFill(resp, requested) {
    ============================================================ */
 function openSettings() {
   const s = state.settings;
-  $('setAiService').value = s.aiService;
-  $('setApiKey').value = s.aiApiKey;
   $('setProxyUrl').value = s.proxyUrl;
   $('setRefresh').value = s.refreshMin;
   $('acctName').textContent = state.userName || 'Signed in';
@@ -567,12 +592,10 @@ function closeSettings() { $('settingsDrawer').classList.remove('is-open'); $('s
 async function saveSettings() {
   const prevProxy = state.settings.proxyUrl;
   state.settings = {
-    aiService: $('setAiService').value,
-    aiApiKey: $('setApiKey').value.trim(),
     proxyUrl: ($('setProxyUrl').value || DEFAULTS.proxyUrl).trim(),
     refreshMin: Math.max(5, Number($('setRefresh').value) || 15)
   };
-  await sset({ beckSettings: state.settings, aiApiKey: state.settings.aiApiKey, aiService: state.settings.aiService });
+  await sset({ beckSettings: state.settings });
   closeSettings();
   scheduleRefresh();
   toast('Settings saved');
@@ -638,10 +661,8 @@ async function signOut() {
    Init
    ============================================================ */
 async function init() {
-  const saved = await sget(['beckSettings', 'aiApiKey', 'aiService', 'accessCode']);
+  const saved = await sget(['beckSettings', 'accessCode']);
   state.settings = { ...DEFAULTS, ...(saved.beckSettings || {}) };
-  if (saved.aiApiKey && !state.settings.aiApiKey) state.settings.aiApiKey = saved.aiApiKey;
-  if (saved.aiService) state.settings.aiService = saved.aiService;
   state.accessCode = saved.accessCode || null;
 
   $('btnSettings').onclick = openSettings;
