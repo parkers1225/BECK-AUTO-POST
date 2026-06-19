@@ -143,6 +143,12 @@ function mapVehicle(o) {
     stock: (o['vehicle_id'] || '').trim(),
     address: (o['address'] || '').trim(),
     vdp: (o['url'] || '').trim(),
+    condition: cond,
+    bodyStyle: (o['body_style'] || '').trim(),
+    transmission: (o['transmission'] || '').trim(),
+    fuelType: (o['fuel_type'] || '').trim(),
+    drivetrain: (o['drivetrain'] || '').trim(),
+    description: (o['description'] || '').trim(),
     primary: images[0] || '',
     images,
     hasPhoto: images.length > 0
@@ -405,8 +411,8 @@ async function generateDescription() {
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generating…';
   const prompt = $('aiPrompt').value.trim();
   const resp = await send('generateDescription', {
-    vehicle: v, prompt,
-    service: state.settings.aiService, apiKey: state.settings.aiApiKey
+    vehicleData: v,
+    userPrompt: prompt
   });
   btn.disabled = false;
   if (resp && resp.success && resp.description) {
