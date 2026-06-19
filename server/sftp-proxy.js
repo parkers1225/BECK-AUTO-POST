@@ -325,6 +325,8 @@ app.get('/health', (req, res) => {
     stores: storeList,
     multiStore: isMultiStore,
     aiConfigured: !!ANTHROPIC_API_KEY,   // boolean only — never exposes the key
+    aiKeyPresent: ('ANTHROPIC_API_KEY' in process.env), // is the env var defined at all on this service?
+    aiKeyLen: (process.env.ANTHROPIC_API_KEY || '').length, // length only, never the value
     aiModel: ANTHROPIC_MODEL
   });
 });
