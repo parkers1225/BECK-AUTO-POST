@@ -120,9 +120,13 @@ function setNativeValue(el, value) {
 function countVehiclePhotos() {
   try {
     const scope = document.querySelector('[role="main"]') || document.body;
-    const imgs = scope.querySelectorAll('img[src^="blob:"]');
+    // Best signal: Facebook's own "Photos · N / 20" counter in the listing form.
+    const text = scope.innerText || '';
+    const m = text.match(/Photos\s*[·•∙]?\s*(\d{1,2})\s*\/\s*20/i);
+    if (m) return parseInt(m[1], 10) || 0;
+    // Fallback: count sizeable uploaded-photo thumbnails (blob: or scontent CDN).
     let count = 0;
-    imgs.forEach((img) => {
+    scope.querySelectorAll('img[src^="blob:"], img[src*="scontent"]').forEach((img) => {
       const w = img.naturalWidth || img.clientWidth || 0;
       const h = img.naturalHeight || img.clientHeight || 0;
       if (w >= 80 && h >= 80) count++;
@@ -376,9 +380,16 @@ async function fillMarketplaceForm() {
     console.warn('%c⚠ Photo upload error:', 'color: #e74c3c; font-weight: bold;', error.message || error);
   }
 
-  // Honest photo verification: count the actual uploaded photo previews in the form
+  // Honest photo verification: Facebook adds the uploaded photos to its "N / 20"
+  // counter over a few seconds — poll and keep the highest count we observe.
   let photosAttached = 0;
-  try { await new Promise(r => setTimeout(r, 800)); photosAttached = countVehiclePhotos(); } catch (e) {}
+  try {
+    for (let t = 0; t < 9; t++) {
+      await new Promise(r => setTimeout(r, 700));
+      const n = countVehiclePhotos();
+      if (n > photosAttached) photosAttached = n;
+    }
+  } catch (e) {}
   results.photos = photosAttached > 0;
 
   const successCount = Object.values(results).filter(Boolean).length;
