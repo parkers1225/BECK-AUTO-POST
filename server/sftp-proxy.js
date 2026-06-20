@@ -586,14 +586,14 @@ async function dmDealerWebsiteId(domain) {
 
 async function dmVehicle(vin, domain) {
   const id = await dmDealerWebsiteId(domain);
-  if (!id) return { urls: [], exteriorColor: '', interiorColor: '' };
+  if (!id) return { urls: [], exteriorColor: '', interiorColor: '', stockNumber: '' };
   const d = await dmPost(
-    'query($vin:String!,$id:UUID!){vehicleByVinAndDealerWebsiteId(vin:$vin,dealerWebsiteId:$id){galleryPictureUrls exteriorColor interiorColor}}',
+    'query($vin:String!,$id:UUID!){vehicleByVinAndDealerWebsiteId(vin:$vin,dealerWebsiteId:$id){galleryPictureUrls exteriorColor interiorColor stockNumber}}',
     { vin, id });
   const v = d && d.vehicleByVinAndDealerWebsiteId;
   const urls = ((v && v.galleryPictureUrls) || [])
     .map(u => (typeof u === 'string' && u.startsWith('//')) ? 'https:' + u : u).filter(Boolean);
-  return { urls, exteriorColor: (v && v.exteriorColor) || '', interiorColor: (v && v.interiorColor) || '' };
+  return { urls, exteriorColor: (v && v.exteriorColor) || '', interiorColor: (v && v.interiorColor) || '', stockNumber: (v && v.stockNumber) || '' };
 }
 
 // GET /photos?vin=...&domain=...  ->  { photos: [url, ...] }   (access-code gated when DB is on)
@@ -610,11 +610,11 @@ app.get('/photos', async (req, res) => {
     const ck = vin + '|' + domain;
     const cached = dmPhotoCache.get(ck);
     if (cached && cached.exp > Date.now()) {
-      return res.json({ photos: cached.urls, exteriorColor: cached.exteriorColor, interiorColor: cached.interiorColor, cached: true });
+      return res.json({ photos: cached.urls, exteriorColor: cached.exteriorColor, interiorColor: cached.interiorColor, stockNumber: cached.stockNumber, cached: true });
     }
     const dm = await dmVehicle(vin, domain);
     dmPhotoCache.set(ck, { ...dm, exp: Date.now() + DM_PHOTO_TTL });
-    res.json({ photos: dm.urls, exteriorColor: dm.exteriorColor, interiorColor: dm.interiorColor });
+    res.json({ photos: dm.urls, exteriorColor: dm.exteriorColor, interiorColor: dm.interiorColor, stockNumber: dm.stockNumber });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }

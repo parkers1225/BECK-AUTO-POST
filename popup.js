@@ -136,6 +136,10 @@ function mapVehicle(o) {
   // a NEW unit with no/zero odometer in the feed is listed at 301 miles.
   let mileage = numAny(o, ['mileage.value', 'mileage', 'Mileage', 'odometer', 'Odometer', 'odometer.value', 'miles']);
   if ((mileage == null || mileage === 0) && cond === 'New') mileage = 301;
+  // The feed's vehicle_id is often just the VIN — only treat it as a stock number
+  // when it's actually different. The real stock comes from DealerMade on select.
+  const vehId = (o['vehicle_id'] || '').trim();
+  const stock = (vehId && vehId.toUpperCase() !== vin.toUpperCase()) ? vehId : '';
   return {
     vin, year, make, model, trim,
     title: [year, make, model, trim].filter(Boolean).join(' '),
@@ -146,7 +150,7 @@ function mapVehicle(o) {
     body: bodyCategory(o['body_style']),
     bodyRaw: (o['body_style'] || '').trim(),
     cond,
-    stock: (o['vehicle_id'] || '').trim(),
+    stock,
     address: (o['address'] || '').trim(),
     vdp: (o['url'] || '').trim(),
     condition: cond,
@@ -296,7 +300,7 @@ function renderInventory() {
       <span class="vrow__main">
         <span class="vtitle">${esc(v.title)}</span>
         <span class="vmeta">${money(v.price)} · ${milesFmt(v.mileage, v.mileageUnit)} · ${esc(v.body)}</span>
-        <span class="vvin">${v.stock ? 'Stock ' + esc(v.stock.slice(-6)) + ' · ' : ''}VIN ·${esc(v.vin.slice(-6))}</span>
+        <span class="vvin">${v.stock ? 'Stock ' + esc(v.stock) + ' · ' : ''}VIN ·${esc(v.vin.slice(-6))}</span>
       </span>${chip}</button>`;
   }).join('');
   list.querySelectorAll('.vrow').forEach(b => b.onclick = () => selectVehicle(+b.getAttribute('data-i')));
@@ -329,6 +333,7 @@ async function loadGallery(i, v) {
     if (data) {
       if (data.exteriorColor && !v.color) v.color = data.exteriorColor;
       if (data.interiorColor && !v.interiorColor) v.interiorColor = data.interiorColor;
+      if (data.stockNumber) v.stock = data.stockNumber;
     }
     const gallery = (data && data.photos) || [];
     if (gallery.length && state.sel === i) {
@@ -588,6 +593,27 @@ function finishFill(resp, requested) {
     r.innerHTML = `<div class="result result--err"><i class="ti ti-circle-x"></i><div><b>Couldn't fill the listing.</b> ${esc(msg)}</div></div>`;
     toast('Fill failed', 'err');
   }
+
+  if (resp && resp.success) {
+    // After a successful fill, the primary action becomes starting a new vehicle.
+    const nb = $('dockNext'), hint = $('dockHint');
+    nb.disabled = false; if (hint) hint.textContent = '';
+    nb.innerHTML = '<i class="ti ti-plus"></i><span>Post Another Vehicle</span>';
+    nb.onclick = postAnother;
+  }
+}
+
+// Reset the flow to step 1 to post another vehicle. The filled Facebook tab stays
+// open for the rep to review and publish.
+function postAnother() {
+  state.sel = null;
+  state.photos = [];
+  state.picked = new Set();
+  state.desc = '';
+  state.generated = false;
+  state.focus = 0;
+  const r = $('fillResult'); if (r) r.innerHTML = '';
+  go(1);
 }
 
 /* ============================================================

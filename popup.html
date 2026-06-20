@@ -9,7 +9,7 @@
 <body>
 <div class="gate" id="gate" hidden>
   <div class="gate__card">
-    <div class="gate__brand"><span class="brand__mark">beck</span><span class="brand__tag">Auto-Post</span></div>
+    <div class="gate__brand"><img class="brand__logo" src="icons/beck-wordmark.png" alt="beck"><span class="brand__tag">Auto-Post</span></div>
     <h1 class="gate__title">Enter your access code</h1>
     <p class="gate__sub">Your manager gave you a code that connects you to your store.</p>
     <input class="input" id="gateCode" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" aria-label="Access code">
@@ -22,7 +22,7 @@
 
   <!-- Top bar -->
   <header class="topbar">
-    <div class="brand"><span class="brand__mark">beck</span><span class="brand__tag">Auto-Post</span></div>
+    <div class="brand"><img class="brand__logo" src="icons/beck-wordmark.png" alt="beck"><span class="brand__tag">Auto-Post</span></div>
     <span class="store"><span class="live"></span><span id="storeName">—</span></span>
     <button id="btnSettings" class="icon-btn" aria-label="Settings" title="Settings"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button>
   </header>
@@ -159,5 +159,6 @@
 </aside>
 
 <script src="popup.js"></script>
+<script type="module" src="intro.js"></script>
 </body>
 </html>
