@@ -182,6 +182,7 @@ async function loadInventory(silent) {
     state.lastSync = Date.now();
     state.loading = false;
     if (state.step === 1) renderStep();
+    enrichStocks(vehicles);   // fire-and-forget: backfill real DealerMade stock numbers
     if (!silent) toast(`${vehicles.length} vehicles synced`);
     return true;
   } catch (e) {
@@ -191,6 +192,38 @@ async function loadInventory(silent) {
     console.error('loadInventory failed:', e);
     return false;
   }
+}
+
+// Backfill real DealerMade stock numbers for the whole list (the feed's vehicle_id
+// is just the VIN). Fire-and-forget: the list shows instantly, then re-renders once
+// stocks arrive so cards display — and search matches — the real stock number.
+async function enrichStocks(vehicles) {
+  const base = state.settings.proxyUrl.replace(/\/+$/, '');
+  const byDomain = new Map();
+  for (const v of vehicles) {
+    let domain = '';
+    try { domain = v.vdp ? new URL(v.vdp).hostname : ''; } catch (e) {}
+    if (!domain || !v.vin) continue;
+    if (!byDomain.has(domain)) byDomain.set(domain, []);
+    byDomain.get(domain).push(v.vin);
+  }
+  let any = false;
+  for (const [domain, vins] of byDomain) {
+    try {
+      const res = await fetch(`${base}/stocks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Access-Code': state.accessCode || '' },
+        body: JSON.stringify({ domain, vins })
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const stocks = (data && data.stocks) || {};
+      for (const v of vehicles) {
+        if (stocks[v.vin] && v.stock !== stocks[v.vin]) { v.stock = stocks[v.vin]; any = true; }
+      }
+    } catch (e) { /* keep VIN-only on failure */ }
+  }
+  if (any && state.step === 1 && state.vehicles === vehicles) renderInventory();
 }
 
 let refreshTimer = null;

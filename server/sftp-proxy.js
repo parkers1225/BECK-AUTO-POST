@@ -543,10 +543,11 @@ users.initDb().catch(err => console.error('User DB init failed:', err.message));
 const DM_GRAPHQL = 'https://api.dealermade-next.com/v4/graphql';
 const dmDomainCache = new Map();   // domain -> { id, exp }
 const dmPhotoCache = new Map();    // vin|domain -> { urls, exteriorColor, interiorColor, exp }
+const dmStockCache = new Map();    // vin|domain -> { stock, exp }
 const DM_DOMAIN_TTL = 12 * 60 * 60 * 1000;
 const DM_PHOTO_TTL = 60 * 60 * 1000;
 
-function dmPost(query, variables) {
+function dmPost(query, variables, lenient) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({ query, variables });
     const u = new URL(DM_GRAPHQL);
@@ -559,8 +560,10 @@ function dmPost(query, variables) {
       r.on('end', () => {
         try {
           const j = JSON.parse(buf);
-          if (j.errors) return reject(new Error(j.errors[0].message));
-          resolve(j.data);
+          // lenient: a batched query may carry per-field errors yet still return
+          // usable data for the other aliases — keep what came back.
+          if (j.errors && !lenient) return reject(new Error(j.errors[0].message));
+          resolve(j.data || {});
         } catch (e) { reject(new Error('Bad response from DealerMade')); }
       });
     });
@@ -596,6 +599,37 @@ async function dmVehicle(vin, domain) {
   return { urls, exteriorColor: (v && v.exteriorColor) || '', interiorColor: (v && v.interiorColor) || '', stockNumber: (v && v.stockNumber) || '' };
 }
 
+// Real stock numbers for many VINs at once (the vAuto feed's vehicle_id is just
+// the VIN). Batches DealerMade lookups via GraphQL aliases, ~40 per request, and
+// caches per VIN so the whole inventory list can show + search by stock cheaply.
+async function dmStocks(vins, domain) {
+  const out = {};
+  const id = await dmDealerWebsiteId(domain);
+  if (!id) return out;
+  const now = Date.now();
+  const need = [];
+  for (const vin of vins) {
+    const c = dmStockCache.get(vin + '|' + domain);
+    if (c && c.exp > now) { if (c.stock) out[vin] = c.stock; }
+    else need.push(vin);
+  }
+  for (let i = 0; i < need.length; i += 40) {
+    const chunk = need.slice(i, i + 40);
+    const fields = chunk.map((vin, j) =>
+      `s${j}: vehicleByVinAndDealerWebsiteId(vin:${JSON.stringify(vin)},dealerWebsiteId:$id){stockNumber}`).join(' ');
+    let data = null;
+    try { data = await dmPost(`query($id:UUID!){${fields}}`, { id }, true); } catch (e) { data = null; }
+    if (!data) continue; // transient failure — don't cache, retry next load
+    chunk.forEach((vin, j) => {
+      const rec = data['s' + j];
+      const stock = (rec && rec.stockNumber) || '';
+      dmStockCache.set(vin + '|' + domain, { stock, exp: now + DM_PHOTO_TTL });
+      if (stock) out[vin] = stock;
+    });
+  }
+  return out;
+}
+
 // GET /photos?vin=...&domain=...  ->  { photos: [url, ...] }   (access-code gated when DB is on)
 app.get('/photos', async (req, res) => {
   try {
@@ -615,6 +649,27 @@ app.get('/photos', async (req, res) => {
     const dm = await dmVehicle(vin, domain);
     dmPhotoCache.set(ck, { ...dm, exp: Date.now() + DM_PHOTO_TTL });
     res.json({ photos: dm.urls, exteriorColor: dm.exteriorColor, interiorColor: dm.interiorColor, stockNumber: dm.stockNumber });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// POST /stocks  { domain, vins:[...] }  ->  { stocks: { VIN: stockNumber } }
+// Real DealerMade stock numbers for the whole list (access-code gated like /photos).
+app.post('/stocks', async (req, res) => {
+  try {
+    if (users.isReady()) {
+      const code = req.headers['x-access-code'] || (req.body && req.body.code);
+      const u = await users.lookupCode(code);
+      if (!u) return res.status(401).json({ error: 'Invalid or inactive access code' });
+    }
+    const domain = cleanDomain((req.body && req.body.domain) || '');
+    const vins = (req.body && Array.isArray(req.body.vins))
+      ? req.body.vins.map(s => String(s || '').trim()).filter(Boolean).slice(0, 1000)
+      : [];
+    if (!domain || !vins.length) return res.status(400).json({ error: 'domain and vins are required' });
+    const stocks = await dmStocks(vins, domain);
+    res.json({ stocks });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
