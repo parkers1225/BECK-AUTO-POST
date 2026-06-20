@@ -542,7 +542,7 @@ users.initDb().catch(err => console.error('User DB init failed:', err.message));
 // ============================================================
 const DM_GRAPHQL = 'https://api.dealermade-next.com/v4/graphql';
 const dmDomainCache = new Map();   // domain -> { id, exp }
-const dmPhotoCache = new Map();    // vin|domain -> { urls, exp }
+const dmPhotoCache = new Map();    // vin|domain -> { urls, exteriorColor, interiorColor, exp }
 const DM_DOMAIN_TTL = 12 * 60 * 60 * 1000;
 const DM_PHOTO_TTL = 60 * 60 * 1000;
 
@@ -584,15 +584,16 @@ async function dmDealerWebsiteId(domain) {
   return id;
 }
 
-async function dmGalleryPhotos(vin, domain) {
+async function dmVehicle(vin, domain) {
   const id = await dmDealerWebsiteId(domain);
-  if (!id) return [];
+  if (!id) return { urls: [], exteriorColor: '', interiorColor: '' };
   const d = await dmPost(
-    'query($vin:String!,$id:UUID!){vehicleByVinAndDealerWebsiteId(vin:$vin,dealerWebsiteId:$id){galleryPictureUrls}}',
+    'query($vin:String!,$id:UUID!){vehicleByVinAndDealerWebsiteId(vin:$vin,dealerWebsiteId:$id){galleryPictureUrls exteriorColor interiorColor}}',
     { vin, id });
   const v = d && d.vehicleByVinAndDealerWebsiteId;
-  const urls = (v && v.galleryPictureUrls) || [];
-  return urls.map(u => (typeof u === 'string' && u.startsWith('//')) ? 'https:' + u : u).filter(Boolean);
+  const urls = ((v && v.galleryPictureUrls) || [])
+    .map(u => (typeof u === 'string' && u.startsWith('//')) ? 'https:' + u : u).filter(Boolean);
+  return { urls, exteriorColor: (v && v.exteriorColor) || '', interiorColor: (v && v.interiorColor) || '' };
 }
 
 // GET /photos?vin=...&domain=...  ->  { photos: [url, ...] }   (access-code gated when DB is on)
@@ -608,10 +609,12 @@ app.get('/photos', async (req, res) => {
     if (!vin || !domain) return res.status(400).json({ error: 'vin and domain are required' });
     const ck = vin + '|' + domain;
     const cached = dmPhotoCache.get(ck);
-    if (cached && cached.exp > Date.now()) return res.json({ photos: cached.urls, cached: true });
-    const urls = await dmGalleryPhotos(vin, domain);
-    dmPhotoCache.set(ck, { urls, exp: Date.now() + DM_PHOTO_TTL });
-    res.json({ photos: urls });
+    if (cached && cached.exp > Date.now()) {
+      return res.json({ photos: cached.urls, exteriorColor: cached.exteriorColor, interiorColor: cached.interiorColor, cached: true });
+    }
+    const dm = await dmVehicle(vin, domain);
+    dmPhotoCache.set(ck, { ...dm, exp: Date.now() + DM_PHOTO_TTL });
+    res.json({ photos: dm.urls, exteriorColor: dm.exteriorColor, interiorColor: dm.interiorColor });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }

@@ -111,6 +111,10 @@ function bodyCategory(raw) {
   return 'Other';
 }
 function num(v) { const n = parseFloat(String(v || '').replace(/[^0-9.]/g, '')); return isNaN(n) ? null : n; }
+// First non-empty trimmed value among candidate column names (handles feed naming variants).
+function pick(o, keys) { for (const k of keys) { const v = (o[k] || '').trim(); if (v) return v; } return ''; }
+// First numeric value among candidate column names.
+function numAny(o, keys) { for (const k of keys) { const n = num(o[k]); if (n != null) return n; } return null; }
 
 function mapVehicle(o) {
   const vin = (o['vin'] || o['vehicle_id'] || '').trim();
@@ -128,13 +132,17 @@ function mapVehicle(o) {
     const u = (o[`image[${i}].url`] || '').trim();
     if (u) images.push(u);
   }
+  // Mileage from the feed, tolerant of column-name variants. Dealership rule:
+  // a NEW unit with no/zero odometer in the feed is listed at 301 miles.
+  let mileage = numAny(o, ['mileage.value', 'mileage', 'Mileage', 'odometer', 'Odometer', 'odometer.value', 'miles']);
+  if ((mileage == null || mileage === 0) && cond === 'New') mileage = 301;
   return {
     vin, year, make, model, trim,
     title: [year, make, model, trim].filter(Boolean).join(' '),
     price,
-    mileage: num(o['mileage.value']),
-    mileageUnit: (o['mileage.unit'] || 'MI').trim(),
-    color: (o['exterior_color'] || '').trim(),
+    mileage,
+    mileageUnit: pick(o, ['mileage.unit', 'mileage_unit']) || 'MI',
+    color: pick(o, ['exterior_color', 'Exterior Color', 'ExteriorColor', 'exteriorColor', 'color', 'Color', 'exterior_color_name', 'ext_color']),
     body: bodyCategory(o['body_style']),
     bodyRaw: (o['body_style'] || '').trim(),
     cond,
@@ -316,6 +324,12 @@ async function loadGallery(i, v) {
       { headers: { 'X-Access-Code': state.accessCode || '' } });
     if (!res.ok) return;
     const data = await res.json();
+    // DealerMade also carries color; use it to backfill what the vAuto feed omits
+    // (new units often ship with no exterior color, and the feed has no interior color).
+    if (data) {
+      if (data.exteriorColor && !v.color) v.color = data.exteriorColor;
+      if (data.interiorColor && !v.interiorColor) v.interiorColor = data.interiorColor;
+    }
     const gallery = (data && data.photos) || [];
     if (gallery.length && state.sel === i) {
       state.photos = gallery;
@@ -528,7 +542,8 @@ async function fillMarketplace() {
       vin: v.vin, year: v.year, make: v.make, model: v.model, trim: v.trim,
       title: v.title, price: v.price, mileage: v.mileage, mileageUnit: v.mileageUnit,
       exterior_color: v.color, body: v.body, condition: v.cond, address: v.address,
-      bodyStyle: v.bodyStyle, fuelType: v.fuelType, transmission: v.transmission
+      bodyStyle: v.bodyStyle, fuelType: v.fuelType, transmission: v.transmission,
+      interiorColor: v.interiorColor
     },
     generatedDescription: state.desc,
     selectedPhotoData: {

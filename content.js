@@ -116,11 +116,10 @@ function setNativeValue(el, value) {
 function normalizeDigits(v) { return String(v == null ? '' : v).replace(/[^0-9]/g, ''); }
 
 // Single source of truth for the mileage value we WRITE and VERIFY against.
-// Facebook rejects sub-300 odometer readings, so anything under 300 becomes 301.
 function getMileageTarget() {
-  let m = parseInt(vehicleData && vehicleData.mileage, 10) || 0;
-  if (m > 0 && m < 300) m = 301;
-  return String(m);
+  // Honor the exact mileage we were given — new units are already set to 30 by
+  // the dealership rule in popup mapVehicle. No artificial Facebook minimum.
+  return String(parseInt(vehicleData && vehicleData.mileage, 10) || 0);
 }
 
 // Cheap, universal current-value reader for any found field. INPUT/TEXTAREA read
@@ -3447,7 +3446,7 @@ async function fillPhotos() {
         dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
         
         console.log('Drag-and-drop events dispatched, waiting...');
-        await waitForCondition(() => detectUploadedPhotos(), { timeout: 3000, interval: 100 });
+        await waitForCondition(() => detectUploadedPhotos(), { timeout: 1500, interval: 100 });
         
         if (detectUploadedPhotos()) {
           console.log('✓ Strategy 1 (Drag-and-Drop) succeeded!');
