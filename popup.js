@@ -609,6 +609,18 @@ async function fillMarketplace() {
   }
 }
 
+// Report a usage event to the proxy for per-rep stats. Fire-and-forget.
+function trackEvent(event, vin) {
+  try {
+    const base = state.settings.proxyUrl.replace(/\/+$/, '');
+    fetch(`${base}/track`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Access-Code': state.accessCode || '' },
+      body: JSON.stringify({ event, vin: vin || '' })
+    }).catch(() => {});
+  } catch (e) {}
+}
+
 function finishFill(resp, requested) {
   state.filling = false;
   updateDock();
@@ -628,6 +640,7 @@ function finishFill(resp, requested) {
   }
 
   if (resp && resp.success) {
+    trackEvent('fill', (curVehicle() || {}).vin);
     // After a successful fill, the primary action becomes starting a new vehicle.
     const nb = $('dockNext'), hint = $('dockHint');
     nb.disabled = false; if (hint) hint.textContent = '';

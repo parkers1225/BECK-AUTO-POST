@@ -486,6 +486,7 @@ app.post('/auth', async (req, res) => {
     const u = await users.lookupCode(code);
     if (!u) return res.status(401).json({ success: false, error: 'Invalid or inactive access code' });
     if (!stores[u.store]) return res.status(409).json({ success: false, error: `Assigned store "${u.store}" is not configured` });
+    users.logEvent(u, 'login');
     res.json({ success: true, store: u.store, storeName: stores[u.store].name || u.store, name: u.name });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -511,6 +512,10 @@ app.get('/admin', adminAuth, (req, res) => res.sendFile(path.join(__dirname, 'ad
 app.get('/admin/api/users', adminAuth, async (req, res) => {
   if (!requireDb(res)) return;
   try { res.json(await users.listUsers()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/admin/api/stats', adminAuth, async (req, res) => {
+  if (!requireDb(res)) return;
+  try { res.json(await users.usageStats()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/admin/api/users', adminAuth, async (req, res) => {
   if (!requireDb(res)) return;
@@ -637,6 +642,7 @@ app.get('/photos', async (req, res) => {
       const code = req.headers['x-access-code'] || req.query.code;
       const u = await users.lookupCode(code);
       if (!u) return res.status(401).json({ error: 'Invalid or inactive access code' });
+      users.logEvent(u, 'view', req.query.vin);
     }
     const vin = String(req.query.vin || '').trim();
     const domain = cleanDomain(req.query.domain);
@@ -672,6 +678,23 @@ app.post('/stocks', async (req, res) => {
     res.json({ stocks });
   } catch (e) {
     res.status(502).json({ error: e.message });
+  }
+});
+
+// POST /track  { event, vin }  -> record a per-rep usage event (the extension
+// reports each successful Marketplace fill here). Access-code gated.
+app.post('/track', async (req, res) => {
+  try {
+    if (!users.isReady()) return res.json({ ok: true });
+    const code = req.headers['x-access-code'] || (req.body && req.body.code);
+    const u = await users.lookupCode(code);
+    if (!u) return res.status(401).json({ error: 'Invalid or inactive access code' });
+    const event = String((req.body && req.body.event) || '').trim();
+    if (!['fill'].includes(event)) return res.status(400).json({ error: 'Unknown event' });
+    users.logEvent(u, event, req.body && req.body.vin);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -766,14 +789,17 @@ Generate only the description text, no additional commentary.`;
 // Access-code gated, same as /feed and /photos.
 app.post('/generate-description', async (req, res) => {
   try {
+    let actor = null;
     if (users.isReady()) {
       const code = req.headers['x-access-code'] || (req.body && req.body.code);
       const u = await users.lookupCode(code);
       if (!u) return res.status(401).json({ error: 'Invalid or inactive access code' });
+      actor = u;
     }
     if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'AI is not configured on the server yet' });
     const { vehicleData, userPrompt } = req.body || {};
     if (!vehicleData) return res.status(400).json({ error: 'vehicleData is required' });
+    if (actor) users.logEvent(actor, 'description', vehicleData.vin);
     const description = await anthropicGenerate(buildVehiclePrompt(vehicleData, userPrompt));
     if (!description) return res.status(502).json({ error: 'Empty response from AI' });
     res.json({ description });

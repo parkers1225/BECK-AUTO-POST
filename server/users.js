@@ -43,6 +43,17 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER,
+      store TEXT,
+      event TEXT NOT NULL,
+      vin TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_usage_user_time ON usage_events (user_id, created_at)');
   ready = true;
   console.log('✅ User management ready (Postgres)');
   return true;
@@ -126,4 +137,36 @@ async function removeUser(id) {
   invalidate();
 }
 
-module.exports = { initDb, isReady, hasDb, lookupCode, listUsers, addUser, updateUser, removeUser };
+// Record a usage event for a rep. Fire-and-forget — telemetry must never break or
+// slow a real request, so this swallows its own errors.
+async function logEvent(user, event, vin) {
+  if (!ready || !user) return;
+  try {
+    await pool.query(
+      'INSERT INTO usage_events (user_id, store, event, vin) VALUES ($1, $2, $3, $4)',
+      [user.id || null, user.store || null, String(event), vin ? String(vin).slice(0, 32) : null]
+    );
+  } catch (e) { /* never surface telemetry errors */ }
+}
+
+// Per-rep usage aggregates for the admin dashboard.
+async function usageStats() {
+  if (!ready) return [];
+  const { rows } = await pool.query(`
+    SELECT u.id, u.name, u.store, u.active,
+      COUNT(*) FILTER (WHERE e.event = 'fill')                                               AS posts,
+      COUNT(*) FILTER (WHERE e.event = 'fill' AND e.created_at > now() - interval '7 days')  AS posts_7d,
+      COUNT(*) FILTER (WHERE e.event = 'fill' AND e.created_at > now() - interval '30 days') AS posts_30d,
+      COUNT(*) FILTER (WHERE e.event = 'description')                                        AS descriptions,
+      COUNT(*) FILTER (WHERE e.event = 'view')                                               AS views,
+      COUNT(*) FILTER (WHERE e.event = 'login')                                              AS logins,
+      MAX(e.created_at)                                                                      AS last_active
+    FROM app_users u
+    LEFT JOIN usage_events e ON e.user_id = u.id
+    GROUP BY u.id, u.name, u.store, u.active
+    ORDER BY posts DESC, u.store, u.name
+  `);
+  return rows;
+}
+
+module.exports = { initDb, isReady, hasDb, lookupCode, listUsers, addUser, updateUser, removeUser, logEvent, usageStats };

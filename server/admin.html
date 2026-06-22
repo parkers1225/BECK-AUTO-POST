@@ -70,6 +70,14 @@
       <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
     </table>
   </div>
+
+  <div class="card">
+    <h2 style="display:flex;align-items:center;justify-content:space-between">Usage <button class="sm" id="refreshStats">Refresh</button></h2>
+    <table>
+      <thead><tr><th>Name</th><th>Store</th><th>Posts</th><th>7d</th><th>30d</th><th>Descriptions</th><th>Last active</th></tr></thead>
+      <tbody id="statRows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -110,6 +118,33 @@ async function loadUsers(){
   } catch(e){ $('rows').innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`; }
 }
 
+function fmtWhen(ts){
+  if(!ts) return '—';
+  const d = new Date(ts), diff = (Date.now() - d.getTime())/1000;
+  if(diff < 60) return 'just now';
+  if(diff < 3600) return Math.floor(diff/60)+'m ago';
+  if(diff < 86400) return Math.floor(diff/3600)+'h ago';
+  if(diff < 86400*7) return Math.floor(diff/86400)+'d ago';
+  return d.toLocaleDateString();
+}
+async function loadStats(){
+  try {
+    const stats = await api('GET','/admin/api/stats');
+    const tb = $('statRows');
+    if(!stats.length){ tb.innerHTML = '<tr><td colspan="7" class="empty">No usage yet.</td></tr>'; return; }
+    tb.innerHTML = stats.map(s=>`
+      <tr>
+        <td>${esc(s.name)}${s.active?'':' <span class="muted">(revoked)</span>'}</td>
+        <td>${esc(s.store)}</td>
+        <td><b>${s.posts||0}</b></td>
+        <td>${s.posts_7d||0}</td>
+        <td>${s.posts_30d||0}</td>
+        <td>${s.descriptions||0}</td>
+        <td class="muted">${fmtWhen(s.last_active)}</td>
+      </tr>`).join('');
+  } catch(e){ $('statRows').innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`; }
+}
+
 document.addEventListener('click', async (e)=>{
   const t = e.target;
   if(t.dataset.copy!==undefined){ try{ await navigator.clipboard.writeText(t.dataset.copy); toast('Code copied'); }catch(_){ toast('Copy failed'); } return; }
@@ -135,8 +170,9 @@ $('addBtn').onclick = async ()=>{
   catch(err){ toast(err.message); }
 };
 $('newName').addEventListener('keydown', e=>{ if(e.key==='Enter') $('addBtn').click(); });
+$('refreshStats').onclick = loadStats;
 
-(async()=>{ await loadStores(); await loadUsers(); })();
+(async()=>{ await loadStores(); await loadUsers(); loadStats(); })();
 </script>
 </body>
 </html>
