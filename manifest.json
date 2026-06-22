@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Beck Auto-Post",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Automate Facebook Marketplace vehicle listings by matching photos to VIN, extracting CSV data, and generating descriptions",
   "permissions": [
     "activeTab",
