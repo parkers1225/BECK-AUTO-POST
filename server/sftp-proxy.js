@@ -326,7 +326,7 @@ app.get('/health', (req, res) => {
     multiStore: isMultiStore,
     aiConfigured: !!ANTHROPIC_API_KEY,   // boolean only — never exposes the key
     aiModel: ANTHROPIC_MODEL,
-    build: 'retry-1',                    // bump on deploys to confirm which code is live
+    build: 'retry-2-diag',               // bump on deploys to confirm which code is live
     commit: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7)
   });
 });
@@ -753,6 +753,7 @@ async function anthropicGenerate(prompt) {
       res = await anthropicOnce(prompt);
     } catch (e) {                       // network error / timeout — retryable
       lastStatus = 0; lastErr = e.message;
+      console.warn(`[anthropic] attempt ${attempt + 1} network error: ${e.message}`);
       if (attempt < MAX_ATTEMPTS - 1) { await aiSleep(aiBackoff(attempt)); continue; }
       break;
     }
@@ -766,17 +767,17 @@ async function anthropicGenerate(prompt) {
     let j = {};
     try { j = JSON.parse(res.body); } catch (e) {}
     lastErr = (j.error && j.error.message) || `Anthropic error ${res.status}`;
+    console.warn(`[anthropic] attempt ${attempt + 1} status ${res.status}: ${lastErr}`);
     if (RETRYABLE.has(res.status) && attempt < MAX_ATTEMPTS - 1) {
       await aiSleep(res.retryAfter ? res.retryAfter * 1000 : aiBackoff(attempt));
       continue;
     }
     break;                              // non-retryable, or out of attempts
   }
-  // Overload/rate-limit/network exhausted → a friendly, try-again message.
-  if (lastStatus === 0 || lastStatus === 429 || lastStatus === 503 || lastStatus === 529) {
-    throw new Error('The AI is busy right now — please try again in a moment.');
-  }
-  throw new Error(lastErr || 'AI request failed');
+  // TEMPORARY: surface the real status + message so we can diagnose the consistent
+  // failure (restore the friendly "AI is busy" wording once the cause is known).
+  console.warn(`[anthropic] all ${MAX_ATTEMPTS} attempts failed — last status ${lastStatus}: ${lastErr}`);
+  throw new Error(`AI unavailable (status ${lastStatus}: ${lastErr})`);
 }
 
 function buildVehiclePrompt(v, userPrompt) {
