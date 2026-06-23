@@ -707,7 +707,12 @@ app.post('/track', async (req, res) => {
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
-function anthropicGenerate(prompt) {
+function aiSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function aiBackoff(attempt) { return Math.min(8000, 600 * Math.pow(2, attempt)) + Math.floor(Math.random() * 300); }
+
+// One raw request to Anthropic. Resolves { status, body, retryAfter } for any HTTP
+// response (does NOT reject on 4xx/5xx); rejects only on a network error/timeout.
+function anthropicOnce(prompt) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({
       model: ANTHROPIC_MODEL,
@@ -725,19 +730,51 @@ function anthropicGenerate(prompt) {
     }, (r) => {
       let buf = '';
       r.on('data', c => buf += c);
-      r.on('end', () => {
-        try {
-          const j = JSON.parse(buf);
-          if (r.statusCode >= 400) return reject(new Error((j.error && j.error.message) || `Anthropic error ${r.statusCode}`));
-          const text = j.content && j.content[0] && j.content[0].text;
-          resolve((text || '').trim());
-        } catch (e) { reject(new Error('Bad response from Anthropic')); }
-      });
+      r.on('end', () => resolve({ status: r.statusCode, body: buf, retryAfter: parseInt(r.headers['retry-after'], 10) || 0 }));
     });
     req.on('error', reject);
     req.setTimeout(30000, () => req.destroy(new Error('Anthropic request timed out')));
     req.write(data); req.end();
   });
+}
+
+// Anthropic can return 429 (rate limit) or 529 (overloaded) under load — both are
+// transient. Retry with exponential backoff + jitter (honoring Retry-After) so a
+// busy moment doesn't surface to the rep as a hard error.
+async function anthropicGenerate(prompt) {
+  const RETRYABLE = new Set([429, 500, 502, 503, 529]);
+  const MAX_ATTEMPTS = 4;
+  let lastStatus = 0, lastErr = '';
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    let res;
+    try {
+      res = await anthropicOnce(prompt);
+    } catch (e) {                       // network error / timeout — retryable
+      lastStatus = 0; lastErr = e.message;
+      if (attempt < MAX_ATTEMPTS - 1) { await aiSleep(aiBackoff(attempt)); continue; }
+      break;
+    }
+    if (res.status >= 200 && res.status < 300) {
+      let j;
+      try { j = JSON.parse(res.body); } catch (e) { throw new Error('Bad response from Anthropic'); }
+      const text = j.content && j.content[0] && j.content[0].text;
+      return (text || '').trim();
+    }
+    lastStatus = res.status;
+    let j = {};
+    try { j = JSON.parse(res.body); } catch (e) {}
+    lastErr = (j.error && j.error.message) || `Anthropic error ${res.status}`;
+    if (RETRYABLE.has(res.status) && attempt < MAX_ATTEMPTS - 1) {
+      await aiSleep(res.retryAfter ? res.retryAfter * 1000 : aiBackoff(attempt));
+      continue;
+    }
+    break;                              // non-retryable, or out of attempts
+  }
+  // Overload/rate-limit/network exhausted → a friendly, try-again message.
+  if (lastStatus === 0 || lastStatus === 429 || lastStatus === 503 || lastStatus === 529) {
+    throw new Error('The AI is busy right now — please try again in a moment.');
+  }
+  throw new Error(lastErr || 'AI request failed');
 }
 
 function buildVehiclePrompt(v, userPrompt) {
