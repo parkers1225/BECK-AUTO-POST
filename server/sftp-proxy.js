@@ -325,7 +325,9 @@ app.get('/health', (req, res) => {
     stores: storeList,
     multiStore: isMultiStore,
     aiConfigured: !!ANTHROPIC_API_KEY,   // boolean only — never exposes the key
-    aiModel: ANTHROPIC_MODEL
+    aiModel: ANTHROPIC_MODEL,
+    build: 'retry-1',                    // bump on deploys to confirm which code is live
+    commit: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7)
   });
 });
 
