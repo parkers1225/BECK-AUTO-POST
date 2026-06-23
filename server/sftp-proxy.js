@@ -326,7 +326,7 @@ app.get('/health', (req, res) => {
     multiStore: isMultiStore,
     aiConfigured: !!ANTHROPIC_API_KEY,   // boolean only — never exposes the key
     aiModel: ANTHROPIC_MODEL,
-    build: 'retry-2-diag',               // bump on deploys to confirm which code is live
+    build: 'retry-3-fallback',           // bump on deploys to confirm which code is live
     commit: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7)
   });
 });
@@ -708,16 +708,19 @@ app.post('/track', async (req, res) => {
 // ---------------------------------------------------------------------------
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+// Fallback models tried in order when the primary stays overloaded/unavailable.
+const ANTHROPIC_FALLBACK_MODELS = (process.env.ANTHROPIC_FALLBACK_MODELS || 'claude-haiku-4-5,claude-opus-4-8')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 function aiSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function aiBackoff(attempt) { return Math.min(8000, 600 * Math.pow(2, attempt)) + Math.floor(Math.random() * 300); }
 
 // One raw request to Anthropic. Resolves { status, body, retryAfter } for any HTTP
 // response (does NOT reject on 4xx/5xx); rejects only on a network error/timeout.
-function anthropicOnce(prompt) {
+function anthropicOnce(prompt, model) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({
-      model: ANTHROPIC_MODEL,
+      model: model,
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }]
     });
@@ -740,44 +743,49 @@ function anthropicOnce(prompt) {
   });
 }
 
-// Anthropic can return 429 (rate limit) or 529 (overloaded) under load — both are
-// transient. Retry with exponential backoff + jitter (honoring Retry-After) so a
-// busy moment doesn't surface to the rep as a hard error.
+// Generate a description with retry + model fallback. Each model gets a couple of
+// backoff retries; if it stays overloaded (429/529) or errors, fall back to the next
+// model — so a sustained capacity issue on one model doesn't block reps.
 async function anthropicGenerate(prompt) {
+  const models = [ANTHROPIC_MODEL, ...ANTHROPIC_FALLBACK_MODELS].filter((m, i, a) => m && a.indexOf(m) === i);
   const RETRYABLE = new Set([429, 500, 502, 503, 529]);
-  const MAX_ATTEMPTS = 4;
+  const PER_MODEL_ATTEMPTS = 2;
   let lastStatus = 0, lastErr = '';
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    let res;
-    try {
-      res = await anthropicOnce(prompt);
-    } catch (e) {                       // network error / timeout — retryable
-      lastStatus = 0; lastErr = e.message;
-      console.warn(`[anthropic] attempt ${attempt + 1} network error: ${e.message}`);
-      if (attempt < MAX_ATTEMPTS - 1) { await aiSleep(aiBackoff(attempt)); continue; }
-      break;
+  for (const model of models) {
+    for (let attempt = 0; attempt < PER_MODEL_ATTEMPTS; attempt++) {
+      let res;
+      try {
+        res = await anthropicOnce(prompt, model);
+      } catch (e) {                       // network error / timeout
+        lastStatus = 0; lastErr = e.message;
+        console.warn(`[anthropic] ${model} attempt ${attempt + 1} network error: ${e.message}`);
+        if (attempt < PER_MODEL_ATTEMPTS - 1) { await aiSleep(aiBackoff(attempt)); continue; }
+        break;
+      }
+      if (res.status >= 200 && res.status < 300) {
+        let j;
+        try { j = JSON.parse(res.body); } catch (e) { throw new Error('Bad response from Anthropic'); }
+        const text = j.content && j.content[0] && j.content[0].text;
+        if (model !== models[0]) console.warn(`[anthropic] served by fallback model ${model}`);
+        return (text || '').trim();
+      }
+      lastStatus = res.status;
+      let j = {};
+      try { j = JSON.parse(res.body); } catch (e) {}
+      lastErr = (j.error && j.error.message) || `Anthropic error ${res.status}`;
+      console.warn(`[anthropic] ${model} attempt ${attempt + 1} status ${res.status}: ${lastErr}`);
+      if (RETRYABLE.has(res.status) && attempt < PER_MODEL_ATTEMPTS - 1) {
+        await aiSleep(res.retryAfter ? res.retryAfter * 1000 : aiBackoff(attempt));
+        continue;
+      }
+      break;                              // this model failed — try the next one
     }
-    if (res.status >= 200 && res.status < 300) {
-      let j;
-      try { j = JSON.parse(res.body); } catch (e) { throw new Error('Bad response from Anthropic'); }
-      const text = j.content && j.content[0] && j.content[0].text;
-      return (text || '').trim();
-    }
-    lastStatus = res.status;
-    let j = {};
-    try { j = JSON.parse(res.body); } catch (e) {}
-    lastErr = (j.error && j.error.message) || `Anthropic error ${res.status}`;
-    console.warn(`[anthropic] attempt ${attempt + 1} status ${res.status}: ${lastErr}`);
-    if (RETRYABLE.has(res.status) && attempt < MAX_ATTEMPTS - 1) {
-      await aiSleep(res.retryAfter ? res.retryAfter * 1000 : aiBackoff(attempt));
-      continue;
-    }
-    break;                              // non-retryable, or out of attempts
   }
-  // TEMPORARY: surface the real status + message so we can diagnose the consistent
-  // failure (restore the friendly "AI is busy" wording once the cause is known).
-  console.warn(`[anthropic] all ${MAX_ATTEMPTS} attempts failed — last status ${lastStatus}: ${lastErr}`);
-  throw new Error(`AI unavailable (status ${lastStatus}: ${lastErr})`);
+  console.warn(`[anthropic] all models failed — last status ${lastStatus}: ${lastErr}`);
+  if (lastStatus === 0 || lastStatus === 429 || lastStatus === 503 || lastStatus === 529) {
+    throw new Error('The AI is busy right now — please try again in a moment.');
+  }
+  throw new Error(lastErr || 'AI request failed');
 }
 
 function buildVehiclePrompt(v, userPrompt) {
